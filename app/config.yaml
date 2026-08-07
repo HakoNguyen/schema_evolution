@@ -1,0 +1,85 @@
+registry: 
+  dir: "./data/registry"
+
+scheduler:
+  interval_seconds: 60
+
+telegram: 
+  bot_token: "8879429819:AAHtWcIRLKYU-eoM5MzX1iKoWCDexPIDDpo"
+  chat_id: "8074160008"
+
+# Mỗi "pair" là 1 cặp cần theo dõi. Có 2 chế độ:
+#
+# 1) Có "target": chế độ ĐỒNG BỘ THẬT — source bị theo dõi thay đổi,
+#    target tự động được sửa cấu trúc theo (chạy DDL lên target).
+# 2) KHÔNG có "target": chế độ CHỈ PHÁT HIỆN — dùng khi không có DB đích
+#    thật để đồng bộ. Vẫn phát hiện + phân loại + freeze khi breaking,
+#    nhưng không có DDL nào được chạy ở đâu cả.
+#
+# "type" phải khớp với key trong ENGINE_REGISTRY ở scheduler.py
+# ("postgres", "mysql", sau này thêm "mongodb", "clickhouse").
+pairs:
+  # Chế độ 1: đồng bộ thật, Postgres (nguồn) -> MySQL (đích)
+  - name: "pg_to_mysql"
+    source:
+      type: "postgres"
+      config:
+        host: "localhost"
+        port: 5431
+        user: "admin"
+        password: "password123"
+        dbname: "sample_db"
+    target:
+      type: "mysql"
+      config:
+        host: "localhost"
+        port: 3306
+        user: "root"
+        password: "password123"
+        database: "sample_db"
+    tables:
+      - customers
+      - orders
+ 
+  # Chế độ 2: chỉ phát hiện, không có target -> không tự sửa DB nào.
+  # Ví dụ: theo dõi riêng MySQL mà không có đích để đồng bộ.
+  - name: "mysql_self_monitor"
+    source:
+      type: "mysql"
+      config:
+        host: "localhost"
+        port: 3306
+        user: "root"
+        password: "password123"
+        database: "sample_db"
+    tables:
+      - customers
+      - orders
+ 
+# TODO: khi thêm Mongo/ClickHouse, thêm pair tương tự ở đây (VD
+# "mongo_to_clickhouse"). Lưu ý key config khác nhau theo từng loại DB
+# (dbname vs database) — đã ghi chú trong docstring của postgres.py/mysql.py.
+ 
+  # Use-case 2 (Chương I): NoSQL -> SQL, Mongo (nguồn) -> ClickHouse (đích)
+  - name: "mongo_to_clickhouse"
+    source:
+      type: "mongodb"
+      config:
+        host: "localhost"
+        port: 27017
+        database: "sample_db"
+        # user/password: tuỳ chọn, bỏ qua nếu Mongo không bật auth
+    target:
+      type: "clickhouse"
+      config:
+        host: "localhost"
+        port: 8123
+        user: "default"
+        password: "clickhouse123"
+        database: "default"
+    tables:
+      - users   # tên collection bên Mongo, phải trùng tên bảng bên ClickHouse
+ 
+ 
+ 
+ 

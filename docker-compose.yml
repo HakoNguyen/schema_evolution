@@ -1,0 +1,105 @@
+version: '3.8'
+
+networks:
+  cdc_network:
+    name: schema_evolution_network
+    driver: bridge
+
+services:
+  # 1. Điểm dữ liệu PostgreSQL
+  postgres_db:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: sample_db
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_wal_senders=10"
+    ports:
+      - "5431:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cdc_network
+
+  # 2. Điểm dữ liệu MySQL
+  mysql_db:
+    image: mysql:8.0
+    container_name: mysql_db
+    environment:
+      MYSQL_ROOT_PASSWORD: password123
+      MYSQL_DATABASE: sample_db
+    command:
+      - "--server-id=1"
+      - "--log-bin=mysql-bin"
+      - "--binlog-format=ROW"
+      - "--gtid-mode=ON"
+      - "--enforce-gtid-consistency=ON"
+      - "--binlog-row-image=FULL"
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - cdc_network
+
+  # 3. Điểm dữ liệu MongoDB (replica set - bắt buộc cho Debezium)
+  mongo_db:
+    image: mongo:6.0
+    container_name: mongo_db
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - cdc_network
+    healthcheck:
+      test: mongosh --eval "db.adminCommand('ping')" || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service phụ: khởi tạo replica set cho Mongo (chỉ chạy 1 lần rồi thoát)
+  mongo_init:
+    image: mongo:6.0
+    depends_on:
+      mongo_db:
+        condition: service_healthy
+    networks:
+      - cdc_network
+    entrypoint: >
+      mongosh --host mongo_db:27017 --eval
+      "rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo_db:27017'}]})"
+    restart: "no"
+
+  # 4. Điểm dữ liệu ClickHouse
+  clickhouse_db:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse_db
+    environment:
+      CLICKHOUSE_PASSWORD: "clickhouse123"
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    networks:
+      - cdc_network
+
+volumes:
+  postgres_data:
+  mysql_data:
+  mongo_data:
+  clickhouse_data:

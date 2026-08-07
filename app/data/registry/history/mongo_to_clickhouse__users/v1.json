@@ -1,0 +1,56 @@
+{
+  "table_schema": {
+    "table_name": "users",
+    "columns": [
+      {
+        "name": "_id",
+        "data_type": "text",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "name",
+        "data_type": "text",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "email",
+        "data_type": "text",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "age",
+        "data_type": "int",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "is_vip",
+        "data_type": "boolean",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      }
+    ],
+    "primary_key": [
+      "_id"
+    ],
+    "foreign_keys": []
+  },
+  "is_frozen": false,
+  "version": 1,
+  "updated_at": "2026-07-27T15:12:53.861313"
+}

@@ -1,0 +1,63 @@
+{
+  "table_schema": {
+    "table_name": "customers",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "int",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "full_name",
+        "data_type": "varchar",
+        "nullable": false,
+        "default": null,
+        "max_length": 100
+      },
+      {
+        "name": "email",
+        "data_type": "varchar",
+        "nullable": false,
+        "default": null,
+        "max_length": 150
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp",
+        "nullable": true,
+        "default": "CURRENT_TIMESTAMP",
+        "max_length": null
+      },
+      {
+        "name": "loyalty_tier",
+        "data_type": "varchar",
+        "nullable": true,
+        "default": null,
+        "max_length": 20
+      },
+      {
+        "name": "vip_note",
+        "data_type": "varchar",
+        "nullable": true,
+        "default": null,
+        "max_length": 50
+      },
+      {
+        "name": "vip_note2",
+        "data_type": "varchar",
+        "nullable": true,
+        "default": null,
+        "max_length": 50
+      }
+    ],
+    "primary_key": [
+      "id"
+    ],
+    "foreign_keys": []
+  },
+  "is_frozen": false,
+  "version": 2,
+  "updated_at": "2026-07-27T15:25:03.471432"
+}

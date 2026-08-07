@@ -1,0 +1,82 @@
+version: '3.8'
+
+networks:
+  cdc_network:
+    external: true
+    name: schema_evolution_network
+
+services:
+  # 1. Redpanda (Kafka-compatible broker) - 1 node
+  redpanda:
+    command:
+      - redpanda
+      - start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --rpc-addr redpanda:33145
+      - --advertise-rpc-addr redpanda:33145
+      - --mode dev-container
+      - --smp 1
+      - --memory=1G
+    image: docker.redpanda.com/redpandadata/redpanda:v26.1.2
+    container_name: redpanda
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    networks:
+      - cdc_network
+    ports:
+      - 18081:18081
+      - 18082:18082
+      - 19092:19092
+      - 19644:9644
+
+  # 2. Redpanda Console (UI)
+  redpanda-console:
+    container_name: redpanda-console
+    image: docker.redpanda.com/redpandadata/console:v3.7.1
+    networks:
+      - cdc_network
+    entrypoint: /bin/sh
+    command: -c 'echo "$$CONSOLE_CONFIG_FILE" > /tmp/config.yml; /app/console'
+    environment:
+      CONFIG_FILEPATH: /tmp/config.yml
+      CONSOLE_CONFIG_FILE: |
+        kafka:
+          brokers: ["redpanda:9092"]
+        kafkaConnect:
+          enabled: true
+          clusters:
+            - name: "debezium-cluster"
+              url: "http://debezium:8083"
+    ports:
+      - 8086:8080
+    depends_on:
+      - redpanda
+
+  # 3. Debezium Connect
+  debezium:
+    image: debezium/connect:3.0.0.Final
+    container_name: debezium
+    ports:
+      - "8083:8083"
+    environment:
+      - BOOTSTRAP_SERVERS=redpanda:9092
+      - GROUP_ID=1
+      - CONFIG_STORAGE_TOPIC=debezium_configs
+      - OFFSET_STORAGE_TOPIC=debezium_offsets
+      - STATUS_STORAGE_TOPIC=debezium_statuses
+      - CONFIG_STORAGE_REPLICATION_FACTOR=1
+      - OFFSET_STORAGE_REPLICATION_FACTOR=1
+      - STATUS_STORAGE_REPLICATION_FACTOR=1
+      - KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+    networks:
+      - cdc_network
+    depends_on:
+      - redpanda
+
+volumes:
+  redpanda_data:

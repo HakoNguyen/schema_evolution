@@ -1,0 +1,7 @@
+psycopg2-binary
+mysql-connector-python
+PyYAML
+requests
+streamlit
+pymongo
+clickhouse-connect

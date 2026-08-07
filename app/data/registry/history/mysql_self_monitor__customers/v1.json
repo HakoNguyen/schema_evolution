@@ -1,0 +1,56 @@
+{
+  "table_schema": {
+    "table_name": "customers",
+    "columns": [
+      {
+        "name": "id",
+        "data_type": "int",
+        "nullable": false,
+        "default": null,
+        "max_length": null
+      },
+      {
+        "name": "full_name",
+        "data_type": "varchar",
+        "nullable": false,
+        "default": null,
+        "max_length": 100
+      },
+      {
+        "name": "email",
+        "data_type": "varchar",
+        "nullable": false,
+        "default": null,
+        "max_length": 100
+      },
+      {
+        "name": "phone",
+        "data_type": "varchar",
+        "nullable": true,
+        "default": null,
+        "max_length": 20
+      },
+      {
+        "name": "created_at",
+        "data_type": "timestamp",
+        "nullable": true,
+        "default": "CURRENT_TIMESTAMP",
+        "max_length": null
+      },
+      {
+        "name": "vip_note2",
+        "data_type": "varchar",
+        "nullable": true,
+        "default": null,
+        "max_length": 50
+      }
+    ],
+    "primary_key": [
+      "id"
+    ],
+    "foreign_keys": []
+  },
+  "is_frozen": false,
+  "version": 1,
+  "updated_at": "2026-07-27T11:00:25.004067"
+}
