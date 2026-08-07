@@ -25,7 +25,17 @@ ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
 
 def load_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    
+    config["pairs"] = []
+    pipelines_dir = Path(config_path).parent / "pipelines"
+    if pipelines_dir.exists() and pipelines_dir.is_dir():
+        for p_file in pipelines_dir.glob("*.yaml"):
+            with open(p_file, "r", encoding="utf-8") as pf:
+                pair_config = yaml.safe_load(pf)
+                if pair_config:
+                    config["pairs"].append(pair_config)
+    return config
 
 def build_pairs(pairs_config: list[dict]) -> list[dict]:
     def _build_engine(spec: dict, pair_name: str, role: str) -> BaseEngine:
@@ -88,7 +98,9 @@ def run_cycle(
             except Exception as e:
                 print(f"[scheduler] Lỗi khi quét {name}.{table_name}: {e}")
         
-def main(config_path: str = "config.yaml") -> None:
+def main(config_path: str = "config/main.yaml") -> None:
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
     config = load_config(config_path)
 
     registry = SchemaRegistry(config["registry"]["dir"])

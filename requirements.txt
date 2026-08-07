@@ -5,3 +5,5 @@ requests
 streamlit
 pymongo
 clickhouse-connect
+fastapi
+uvicorn

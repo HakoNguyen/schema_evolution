@@ -1,0 +1,17 @@
+name: "mongo_to_clickhouse"
+source:
+  type: "mongodb"
+  config:
+    host: "localhost"
+    port: 27017
+    database: "sample_db"
+target:
+  type: "clickhouse"
+  config:
+    host: "localhost"
+    port: 8123
+    user: "default"
+    password: "clickhouse123"
+    database: "default"
+tables:
+  - users

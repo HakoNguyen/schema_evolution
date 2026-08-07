@@ -1,0 +1,9 @@
+registry: 
+  dir: "./data/registry"
+
+scheduler:
+  interval_seconds: 60
+
+telegram: 
+  bot_token: "8879429819:AAHtWcIRLKYU-eoM5MzX1iKoWCDexPIDDpo"
+  chat_id: "8074160008"
