@@ -12,6 +12,7 @@ __pycache__/
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
 frontend/.DS_Store
 
 # IDEs and OS
@@ -21,3 +22,6 @@ frontend/.DS_Store
 
 # Data and Registry
 data/
+docker-data/
+*.log
+

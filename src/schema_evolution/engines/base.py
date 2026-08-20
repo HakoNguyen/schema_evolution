@@ -125,10 +125,18 @@ class BaseEngine(ABC):
 
     @abstractmethod
     def generate_ddl(self, changes: list[SchemaChange]) -> list[str]:
-        """Sinh ra DDL tuong ung voi 1 thay doi cau truc"""
+        """Tạo danh sách các câu lệnh DDL tương ứng với thay đổi."""
         raise NotImplementedError("Subclasses must implement this method.")
 
     @abstractmethod
     def execute_ddl(self, ddl_statement: str) -> None:
-        """Thuc thi DDL tuong ung voi 1 thay doi cau truc"""
+        """Thực thi trực tiếp câu lệnh DDL trên cơ sở dữ liệu đích."""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def test_ddl(self, changes: list[SchemaChange]) -> tuple[bool, str]:
+        """
+        Chạy thử (dry-run) các thay đổi DDL trong một môi trường an toàn (sandbox).
+        Trả về (True, "Success message") nếu thành công, hoặc (False, "Error message") nếu thất bại.
+        """
         raise NotImplementedError("Subclasses must implement this method.")

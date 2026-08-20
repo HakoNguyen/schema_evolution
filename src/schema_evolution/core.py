@@ -36,9 +36,47 @@ class SchemaRegistry:
     def __init__(self, registry_dir: str):
         self.registry_dir = Path(registry_dir)
         self.registry_dir.mkdir(parents=True, exist_ok=True)
+        self._migrate_flat_files()
 
-    def _path(self, table_name: str) -> Path:
-        return self.registry_dir / f"{table_name}.json"
+    def _migrate_flat_files(self) -> None:
+        """Migrate legacy flat pair__table.json files to pipeline/table.json subfolders."""
+        for p in list(self.registry_dir.glob("*__*.json")):
+            if p.name.endswith(".draft.json"):
+                continue
+            stem = p.stem
+            if "__" in stem:
+                pipeline_name, tbl = stem.split("__", 1)
+                target_dir = self.registry_dir / pipeline_name
+                target_dir.mkdir(parents=True, exist_ok=True)
+                target_file = target_dir / f"{tbl}.json"
+                if not target_file.exists():
+                    try:
+                        with open(p, "r", encoding="utf-8") as f:
+                            raw = json.load(f)
+                        if "pipeline" not in raw:
+                            raw["pipeline"] = {"name": pipeline_name}
+                        with open(target_file, "w", encoding="utf-8") as f:
+                            json.dump(raw, f, ensure_ascii=False, indent=2)
+                        p.unlink(missing_ok=True)
+                    except Exception as e:
+                        print(f"[SchemaRegistry] Migration error for {p.name}: {e}")
+
+    def _path(self, key: str) -> Path:
+        if "/" in key:
+            pipeline_name, tbl = key.split("/", 1)
+            p = self.registry_dir / pipeline_name / f"{tbl}.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return p
+        elif "__" in key:
+            pipeline_name, tbl = key.split("__", 1)
+            p = self.registry_dir / pipeline_name / f"{tbl}.json"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            flat_path = self.registry_dir / f"{key}.json"
+            if not p.exists() and flat_path.exists():
+                return flat_path
+            return p
+        else:
+            return self.registry_dir / f"{key}.json"
 
     def _read_raw(self, table_name: str) -> dict | None:
         path = self._path(table_name)
@@ -59,19 +97,26 @@ class SchemaRegistry:
             foreign_keys=[ForeignKeySchema(**fk) for fk in s.get("foreign_keys", [])],
         )
 
-    def save(self, table_name: str, schema: TableSchema) -> None:
+    def save(self, table_name: str, schema: TableSchema, pipeline_info: dict | None = None) -> None:
         current_frozen = self.is_frozen(table_name)
         new_version = self.get_version(table_name) + 1
+        
+        if pipeline_info is None and ("/" in table_name or "__" in table_name):
+            sep = "/" if "/" in table_name else "__"
+            p_name = table_name.split(sep, 1)[0]
+            pipeline_info = {"name": p_name}
+            
         data = {
+            "pipeline": pipeline_info or {"name": "default"},
             "table_schema": asdict(schema),
             "is_frozen": current_frozen,
             "version": new_version,
             "updated_at": datetime.now().isoformat(),
         }
-        with open(self._path(table_name), "w", encoding="utf-8") as f:
+        path = self._path(table_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        # Ghi thêm 1 bản bất biến vào history/ — mỗi lần save() thành công
-        # là 1 version mới (V1, V2, ..., Vn), không ghi đè các bản cũ.
         with open(self._history_path(table_name, new_version), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -88,12 +133,13 @@ class SchemaRegistry:
         return raw.get("version", 0)
 
     def _history_path(self, table_name: str, version: int) -> Path:
-        d = self.registry_dir / "history" / table_name
+        p = self._path(table_name)
+        d = p.parent / "history" / p.stem
         d.mkdir(parents=True, exist_ok=True)
         return d / f"v{version}.json"
 
     def list_versions(self, table_name: str) -> list[int]:
-        d = self.registry_dir / "history" / table_name
+        d = self._history_path(table_name, 1).parent
         if not d.exists():
             return []
         versions = []
@@ -119,8 +165,6 @@ class SchemaRegistry:
         )
 
     def get_version_timestamp(self, table_name: str, version: int) -> str | None:
-        """Trả về updated_at (ISO string) của 1 version cụ thể, dùng để
-        hiển thị mốc thời gian trong Streamlit UI. None nếu version không tồn tại."""
         path = self._history_path(table_name, version)
         if not path.exists():
             return None
@@ -133,22 +177,23 @@ class SchemaRegistry:
         if raw is None:
             return
         raw["is_frozen"] = frozen
-        with open(self._path(table_name), "w", encoding="utf-8") as f:
+        path = self._path(table_name)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(raw, f, ensure_ascii=False, indent=2)
 
     def _draft_path(self, table_name: str) -> Path:
-        return self.registry_dir / f"{table_name}.draft.json"
+        p = self._path(table_name)
+        return p.parent / f"{p.stem}.draft.json"
 
     def save_draft(self, table_name: str, schema: TableSchema, breaking_changes: list) -> None:
-        # Lưu bản schema "ứng cử viên" (đầy đủ, chưa được duyệt) tách biệt
-        # khỏi snapshot chính đang dùng — để approve_change/reject_change
-        # dùng sau này.
         data = {
             "table_schema": asdict(schema),
             "breaking_changes": [_serialize_change(c) for c in breaking_changes],
             "detected_at": datetime.now().isoformat(),
         }
-        with open(self._draft_path(table_name), "w", encoding="utf-8") as f:
+        path = self._draft_path(table_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
     def load_draft(self, table_name: str) -> dict | None:

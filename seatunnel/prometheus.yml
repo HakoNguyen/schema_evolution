@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'seatunnel'
+    static_configs:
+      - targets: ['seatunnel-master:8080']
+  - job_name: 'starrocks-fe'
+    static_configs:
+      - targets: ['starrocks-fe:8030']

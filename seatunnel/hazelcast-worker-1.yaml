@@ -1,0 +1,13 @@
+hazelcast:
+  cluster-name: seatunnel
+  network:
+    port:
+      auto-increment: true
+      port: 5801
+    join:
+      multicast:
+        enabled: false
+      tcp-ip:
+        enabled: true
+        member-list:
+          - seatunnel-master

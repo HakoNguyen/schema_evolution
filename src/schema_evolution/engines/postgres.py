@@ -250,3 +250,19 @@ class PostgresEngine(BaseEngine):
             # DDL/bảng tiếp theo trong cùng chu kỳ không bị lây lỗi.
             self.connection.rollback()
             raise
+
+    def test_ddl(self, changes: list[SchemaChange]) -> tuple[bool, str]:
+        if not changes:
+            return True, "No changes to test."
+        
+        statements = self.generate_ddl(changes)
+        try:
+            with self.connection.cursor() as cur:
+                for stmt in statements:
+                    cur.execute(stmt)
+            # Unconditionally rollback to discard changes
+            self.connection.rollback()
+            return True, "Sandbox test passed (transaction rolled back)."
+        except Exception as e:
+            self.connection.rollback()
+            return False, f"Sandbox test failed: {str(e)}"

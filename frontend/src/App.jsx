@@ -4,11 +4,13 @@ import TablesList from './components/TablesList';
 import TableDetails from './components/TableDetails';
 import PendingApproval from './components/PendingApproval';
 import EditSchema from './components/EditSchema';
+import PipelineTopology from './components/PipelineTopology';
+import LiveEventStream from './components/LiveEventStream';
 
 function App() {
   const [tables, setTables] = useState([]);
-  const [activePage, setActivePage] = useState('monitored_tables'); // 'monitored_tables' | 'edit_schema'
-  const [selectedKey, setSelectedKey] = useState(null); // specific table to show details for
+  const [activePage, setActivePage] = useState('monitored_tables'); // 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'edit_schema'
+  const [selectedKey, setSelectedKey] = useState(null);
   const [details, setDetails] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
@@ -51,6 +53,8 @@ function App() {
           <div className="header-breadcrumbs">
             <span>Clusters</span> / 
             {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> Monitored Tables</span>}
+            {activePage === 'pipeline_topology' && <span className="highlight"> Pipeline Topology</span>}
+            {activePage === 'live_events' && <span className="highlight"> Live CDC Stream</span>}
             {activePage === 'edit_schema' && <span className="highlight"> Edit Schema</span>}
             {activePage === 'monitored_tables' && selectedKey && selectedTable && (
               <>
@@ -62,8 +66,14 @@ function App() {
         </header>
 
         <div className="content-scroll">
+          {/* PAGE: Pipeline Topology */}
+          {activePage === 'pipeline_topology' && <PipelineTopology />}
+
+          {/* PAGE: Live CDC Stream */}
+          {activePage === 'live_events' && <LiveEventStream />}
+
           {/* PAGE: Edit Schema */}
-          {activePage === 'edit_schema' && <EditSchema tables={tables} />}
+          {activePage === 'edit_schema' && <EditSchema tables={tables} onDeploySuccess={() => setActivePage('monitored_tables')} />}
 
           {/* PAGE: Monitored Tables (List) */}
           {activePage === 'monitored_tables' && !selectedKey && (

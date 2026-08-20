@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Type, GripVertical, Database } from 'lucide-react';
 
-export default function EditSchema({ tables }) {
+export default function EditSchema({ tables, onDeploySuccess }) {
   const [selectedKey, setSelectedKey] = useState('');
   const [columns, setColumns] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -34,7 +34,7 @@ export default function EditSchema({ tables }) {
     setColumns([...columns, { 
       id: Date.now(), 
       name: 'new_column', 
-      type: 'VARCHAR(50)', 
+      type: 'varchar(50)', 
       nullable: true, 
       isPrimary: false 
     }]);
@@ -46,6 +46,28 @@ export default function EditSchema({ tables }) {
 
   const updateColumn = (id, field, value) => {
     setColumns(columns.map(c => c.id === id ? { ...c, [field]: value } : c));
+  };
+
+  const handleDeploy = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/tables/${selectedKey}/edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ columns: columns })
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        alert("Schema updated and saved as a frozen draft. Please review and deploy in Monitored Tables.");
+        if (onDeploySuccess) onDeploySuccess();
+      } else {
+        alert("Error: " + data.message);
+      }
+    } catch (e) {
+      alert("Error: " + e.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -69,7 +91,7 @@ export default function EditSchema({ tables }) {
             </select>
           </div>
         </div>
-        <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }} disabled={!selectedKey || columns.length === 0}>
+        <button className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }} disabled={!selectedKey || columns.length === 0} onClick={handleDeploy}>
           <Save size={16} /> Deploy Schema
         </button>
       </div>
@@ -111,14 +133,24 @@ export default function EditSchema({ tables }) {
                   onChange={e => updateColumn(col.id, 'type', e.target.value)}
                   disabled={col.isPrimary}
                   title={col.isPrimary ? "Cannot change Primary Key type" : ""}
-                  style={{ backgroundColor: col.isPrimary ? '#f1f5f9' : 'white', cursor: col.isPrimary ? 'not-allowed' : 'pointer' }}
+                  style={{ backgroundColor: col.isPrimary ? '#f1f5f9' : 'white', cursor: col.isPrimary ? 'not-allowed' : 'pointer', textTransform: 'uppercase' }}
                 >
-                  <option value="INTEGER">INTEGER</option>
-                  <option value="VARCHAR(50)">VARCHAR(50)</option>
-                  <option value="VARCHAR(255)">VARCHAR(255)</option>
-                  <option value="TEXT">TEXT</option>
-                  <option value="TIMESTAMP">TIMESTAMP</option>
-                  <option value="BOOLEAN">BOOLEAN</option>
+                  <option value="int">INT</option>
+                  <option value="bigint">BIGINT</option>
+                  <option value="varchar(50)">VARCHAR(50)</option>
+                  <option value="varchar(100)">VARCHAR(100)</option>
+                  <option value="varchar(150)">VARCHAR(150)</option>
+                  <option value="varchar(255)">VARCHAR(255)</option>
+                  <option value="text">TEXT</option>
+                  <option value="timestamp">TIMESTAMP</option>
+                  <option value="boolean">BOOLEAN</option>
+                  {/* Ensure current type is always in the list if it's not one of the above */}
+                  {![
+                    'int', 'bigint', 'varchar(50)', 'varchar(100)', 'varchar(150)', 
+                    'varchar(255)', 'text', 'timestamp', 'boolean'
+                  ].includes(col.type) && (
+                    <option value={col.type}>{col.type.toUpperCase()}</option>
+                  )}
                 </select>
               </div>
 

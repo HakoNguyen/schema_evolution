@@ -126,3 +126,8 @@ class MongoEngine(BaseEngine):
  
     def execute_ddl(self, ddl_statement: str) -> None:
         pass
+
+    def test_ddl(self, changes: list[SchemaChange]) -> tuple[bool, str]:
+        if not changes:
+            return True, "No changes to test."
+        return True, "Sandbox test passed (MongoDB is schema-less, no DDL to dry-run)."

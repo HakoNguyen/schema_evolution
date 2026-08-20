@@ -99,7 +99,7 @@ def run_cycle(
                 print(f"[scheduler] Lỗi khi quét {name}.{table_name}: {e}")
         
 def main(config_path: str = "config/main.yaml") -> None:
-    if len(sys.argv) > 1:
+    if __name__ == "__main__" and len(sys.argv) > 1:
         config_path = sys.argv[1]
     config = load_config(config_path)
 
@@ -110,14 +110,14 @@ def main(config_path: str = "config/main.yaml") -> None:
     )
     pairs = build_pairs(config["pairs"])
     interval = config["scheduler"]["interval_seconds"]
-
-    print(f"[scheduler] Bắt đầu vòng lặp, chu kỳ {interval}s. Ctrl+C để dừng.")
+    print(f"[scheduler] Starting loop, interval {interval}s. Ctrl+C to stop.")
+    
     try: 
         while True: 
             run_cycle(pairs, registry, notifier)
             time.sleep(interval)
     except KeyboardInterrupt:
-        print("\n[scheduler] Nhận Ctrl+C, đang đóng kết nối...")
+        print("\n[scheduler] Nhan Ctrl+C, dang dong ket noi...")
     finally:
         for item in pairs:
             for engine_key in ("source_engine", "target_engine"):

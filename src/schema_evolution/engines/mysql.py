@@ -260,3 +260,44 @@ class MySQLEngine(BaseEngine):
         except Exception:
             self.connection.rollback()
             raise
+
+    def test_ddl(self, changes: list[SchemaChange]) -> tuple[bool, str]:
+        if not changes:
+            return True, "No changes to test."
+        
+        tables = {change.table_name for change in changes}
+        created_sandboxes = []
+        
+        try:
+            cur = self.connection.cursor()
+            # 1. Create sandbox tables
+            for table_name in tables:
+                sandbox_name = f"__sandbox_{table_name}"
+                cur.execute(f"DROP TABLE IF EXISTS {sandbox_name}")
+                cur.execute(f"CREATE TABLE {sandbox_name} LIKE {table_name}")
+                created_sandboxes.append(sandbox_name)
+            
+            # 2. Apply DDL to sandbox tables
+            statements = self.generate_ddl(changes)
+            for stmt, change in zip(statements, changes):
+                sandbox_name = f"__sandbox_{change.table_name}"
+                sandbox_stmt = stmt.replace(
+                    f"ALTER TABLE {change.table_name} ",
+                    f"ALTER TABLE {sandbox_name} ",
+                    1
+                )
+                cur.execute(sandbox_stmt)
+                
+            return True, "Sandbox test passed (applied to clone table)."
+        except Exception as e:
+            return False, f"Sandbox test failed: {str(e)}"
+        finally:
+            # 3. Cleanup
+            if created_sandboxes:
+                try:
+                    cur = self.connection.cursor()
+                    for sandbox_name in created_sandboxes:
+                        cur.execute(f"DROP TABLE IF EXISTS {sandbox_name}")
+                    cur.close()
+                except Exception:
+                    pass
