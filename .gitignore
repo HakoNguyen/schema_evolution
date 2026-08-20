@@ -25,3 +25,5 @@ data/
 docker-data/
 *.log
 
+end_to_end_test_report.md
+src_code_review.md
