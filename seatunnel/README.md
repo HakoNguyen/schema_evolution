@@ -1,6 +1,6 @@
 # Apache SeaTunnel & StarRocks Stack Integration
 
-This folder contains the complete Docker Compose infrastructure setup for **Apache SeaTunnel 2.3.13**, **StarRocks 4.0**, **Prometheus**, and **Grafana**.
+This folder contains the Docker Compose infrastructure setup for **Apache SeaTunnel 2.3.13** and **StarRocks 4.0**.
 
 ## 🚀 Services Overview
 
@@ -10,8 +10,6 @@ This folder contains the complete Docker Compose infrastructure setup for **Apac
 | **starrocks-be** | `8040` | StarRocks Backend Storage & Compute Engine |
 | **seatunnel-master** | `5801`, `8080` | Apache SeaTunnel Cluster Master Node |
 | **seatunnel-worker-1** | internal | Apache SeaTunnel Execution Worker Node |
-| **prometheus** | `9090` | Metrics Collector |
-| **grafana** | `3000` | Real-time Performance & Job Monitoring Dashboard (Admin / `grafana`) |
 
 ---
 
