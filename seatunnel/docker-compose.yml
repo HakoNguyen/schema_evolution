@@ -1,86 +1,8 @@
 networks:
-  starrocks-seatunnel-network:
+  seatunnel-network:
     driver: bridge
 
 services:
-  starrocks-fe:
-    image: starrocks/fe-ubuntu:4.0-latest
-    hostname: starrocks-fe
-    container_name: starrocks-fe
-    env_file:
-      - .env
-    environment:
-      MYSQL_PWD: ${SR_ROOT_PASSWORD:-EYg2Pt6KGvjx}
-    user: root
-    command: |
-      /opt/starrocks/fe/bin/start_fe.sh --host_type FQDN
-    ports:
-      - 8030:8030
-      - 9020:9020
-      - 9030:9030
-    healthcheck:
-      test: 'mysql -u root -h 127.0.0.1 -P 9030 -e "show frontends\G" |grep "Alive: true"'
-      interval: 30s
-      timeout: 20s
-      retries: 10
-      start_period: 120s
-    restart: unless-stopped
-    volumes:
-      - ./docker-data/starrocks/fe/meta:/opt/starrocks/fe/meta
-      - ./docker-data/starrocks/fe/log:/opt/starrocks/fe/log
-      - ./fe.conf:/opt/starrocks/fe/conf/fe.conf:ro
-    networks:
-      - starrocks-seatunnel-network
-    deploy:
-      resources:
-        limits:
-          cpus: '6.0'
-          memory: 10G
-
-  starrocks-be:
-    image: starrocks/be-ubuntu:4.0-latest
-    command:
-      - /bin/bash
-      - -c
-      - |
-        ulimit -u 65535;
-        ulimit -n 65535;
-        sleep 15s
-        mysql --connect-timeout 2 -h starrocks-fe -P 9030 -u root -e "ALTER SYSTEM ADD BACKEND \"starrocks-be:9050\";"
-        mysql --connect-timeout 2 -h starrocks-fe -P 9030 -u root -e "CREATE DATABASE IF NOT EXISTS warehouse;"
-        /opt/starrocks/be/bin/start_be.sh
-    ports:
-      - 8040:8040
-    hostname: starrocks-be
-    container_name: starrocks-be
-    env_file:
-      - .env
-    environment:
-      MYSQL_PWD: ${SR_ROOT_PASSWORD:-EYg2Pt6KGvjx}
-    user: root
-    depends_on:
-      starrocks-fe:
-        condition: service_healthy
-    healthcheck:
-      test: 'mysql -u root -h starrocks-fe -P 9030 -e "SHOW BACKENDS\G" |grep "Alive: true"'
-      interval: 15s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
-    restart: unless-stopped
-    volumes:
-      - ./docker-data/starrocks/be/storage:/opt/starrocks/be/storage
-      - ./docker-data/starrocks/be/log:/opt/starrocks/be/log
-      - ./docker-data/starrocks/be/spill:/opt/starrocks/be/spill
-      - ./be.conf:/opt/starrocks/be/conf/be.conf:ro
-    networks:
-      - starrocks-seatunnel-network
-    deploy:
-      resources:
-        limits:
-          cpus: '12.0'
-          memory: 32G
-
   seatunnel-master:
     image: apache/seatunnel:2.3.13
     hostname: seatunnel-master
@@ -106,7 +28,7 @@ services:
           cpus: '6.0'
           memory: 12G
     networks:
-      - starrocks-seatunnel-network
+      - seatunnel-network
 
   seatunnel-worker-1:
     image: apache/seatunnel:2.3.13
@@ -129,7 +51,7 @@ services:
       - ./docker-data/seatunnel/checkpoint:/opt/seatunnel/checkpoint
     restart: unless-stopped
     networks:
-      - starrocks-seatunnel-network
+      - seatunnel-network
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:5801/hazelcast/health/node-state | grep -q ACTIVE || exit 1"]
       interval: 20s
