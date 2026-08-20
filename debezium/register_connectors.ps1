@@ -72,3 +72,20 @@ try {
 } catch {
     Write-Error "Failed to register Postgres connector: $_"
 }
+
+# 3. Register MongoDB Connector (mongo_to_clickhouse)
+$mongoPayload = Get-Content -Raw -Path "$PSScriptRoot\mongo-source-connector.json"
+
+Write-Host "Registering MongoDB Source Connector..."
+try {
+    if ($existingList -contains "mongo-source-connector") {
+        Write-Host "MongoDB connector already exists. Re-creating..."
+        Invoke-RestMethod -Uri "$debeziumUrl/mongo-source-connector" -Method Delete | Out-Null
+        Start-Sleep -Seconds 2
+    }
+    $response = Invoke-RestMethod -Uri $debeziumUrl -Method Post -Body $mongoPayload -ContentType "application/json"
+    Write-Host "MongoDB connector registered successfully!"
+} catch {
+    Write-Error "Failed to register MongoDB connector: $_"
+}
+

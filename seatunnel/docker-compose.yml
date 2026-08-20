@@ -9,15 +9,16 @@ services:
     container_name: seatunnel-master
     environment:
       JVM_HEAP_OPTS: "-Xms6g -Xmx8g -XX:+UseG1GC"
+      HZ_NETWORK_RESTAPI_ENABLED: "true"
     entrypoint: >
       /bin/sh -c "/opt/seatunnel/bin/seatunnel-cluster.sh -r master"    
     ports:
       - "5801:5801"
-      - "8080:8080"
     volumes:
       - ./hazelcast-master.yaml:/opt/seatunnel/config/hazelcast-master.yaml
       - ./seatunnel.yaml:/opt/seatunnel/config/seatunnel.yaml
       - ./jvm_master_options:/opt/seatunnel/config/jvm_master_options
+      - ./jobs:/opt/seatunnel/jobs
       - ./docker-data/seatunnel/imap:/opt/seatunnel/imap
       - ./docker-data/seatunnel/master/logs:/opt/seatunnel/logs
       - ./docker-data/seatunnel/checkpoint:/opt/seatunnel/checkpoint
@@ -34,6 +35,8 @@ services:
     image: apache/seatunnel:2.3.13
     hostname: seatunnel-worker-1
     container_name: seatunnel-worker-1
+    environment:
+      HZ_NETWORK_RESTAPI_ENABLED: "true"
     entrypoint: >
       /bin/sh -c "/opt/seatunnel/bin/seatunnel-cluster.sh -r worker" 
     depends_on:
@@ -47,6 +50,7 @@ services:
       - ./hazelcast-worker-1.yaml:/opt/seatunnel/config/hazelcast-worker.yaml
       - ./seatunnel.yaml:/opt/seatunnel/config/seatunnel.yaml
       - ./jvm_worker_options:/opt/seatunnel/config/jvm_worker_options
+      - ./jobs:/opt/seatunnel/jobs
       - ./docker-data/seatunnel/worker-1/logs:/opt/seatunnel/logs
       - ./docker-data/seatunnel/checkpoint:/opt/seatunnel/checkpoint
     restart: unless-stopped

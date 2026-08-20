@@ -1,4 +1,4 @@
-# Apache SeaTunnel Stack Integration
+# Apache SeaTunnel Cluster & REST API Guide
 
 This folder contains the Docker Compose infrastructure setup for **Apache SeaTunnel 2.3.13** cluster (Master & Worker).
 
@@ -6,26 +6,36 @@ This folder contains the Docker Compose infrastructure setup for **Apache SeaTun
 
 | Service | Host Port | Role / Description |
 | :--- | :--- | :--- |
-| **seatunnel-master** | `8080`, `5801` | **Apache SeaTunnel Cluster Master Node & Built-in Web Console** (`http://localhost:8080`) |
+| **seatunnel-master** | `5801` | **Apache SeaTunnel Cluster Master Node & REST API** |
 | **seatunnel-worker-1** | internal | Apache SeaTunnel Execution Worker Node |
 
 ---
 
 ## 🛠️ How to Start the Cluster
 
-Navigate to the `seatunnel/` directory and run:
-
 ```bash
+cd seatunnel
 docker compose up -d
 ```
 
-Access the **SeaTunnel Built-in Web Console & REST API** at:
-👉 **`http://localhost:8080`**
+---
 
-Check status:
+## 📡 Useful SeaTunnel REST API Commands
 
+### 1. Check Node Health State
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5801/hazelcast/health/node-state"
+# Returns: ACTIVE
+```
+
+### 2. View Cluster Members & Worker Nodes
+```powershell
+Invoke-RestMethod -Uri "http://localhost:5801/hazelcast/rest/cluster"
+```
+
+### 3. Submit a SeaTunnel Job
 ```bash
-docker compose ps
+curl -X POST "http://localhost:5801/hazelcast/rest/maps/submit-job" -H "Content-Type: application/json" -d @your_job_config.json
 ```
 
 ---
@@ -33,4 +43,4 @@ docker compose ps
 ## 🔗 Integration with Schema Evolution Core
 
 - **Schema Evolution Engine**: Monitors source changes and executes DDL operations (`ALTER TABLE ... ADD COLUMN ...`) on Data Warehouse Target.
-- **Apache SeaTunnel**: Distributed data ingestion engine sinking Kafka messages into Target Warehouse.
+- **Apache SeaTunnel Engine**: Distributed data ingestion engine sinking Kafka messages into Target Warehouse.
