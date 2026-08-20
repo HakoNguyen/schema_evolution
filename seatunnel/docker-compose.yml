@@ -58,18 +58,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 180s
-
-  seatunnel-web:
-    image: apache/seatunnel-web:1.0.0
-    container_name: seatunnel-web
-    hostname: seatunnel-web
-    ports:
-      - "8888:8888"
-    environment:
-      - SEATUNNEL_MASTER_HOST=seatunnel-master
-      - SEATUNNEL_MASTER_PORT=5801
-    depends_on:
-      - seatunnel-master
-    restart: unless-stopped
-    networks:
-      - seatunnel-network

@@ -1,13 +1,12 @@
 # Apache SeaTunnel Stack Integration
 
-This folder contains the Docker Compose infrastructure setup for **Apache SeaTunnel 2.3.13** cluster (Master, Worker & Web UI Console).
+This folder contains the Docker Compose infrastructure setup for **Apache SeaTunnel 2.3.13** cluster (Master & Worker).
 
 ## 🚀 Services Overview
 
 | Service | Host Port | Role / Description |
 | :--- | :--- | :--- |
-| **seatunnel-web** | `8888` | **Apache SeaTunnel Web Console Management UI** (`http://localhost:8888`) |
-| **seatunnel-master** | `5801`, `8080` | Apache SeaTunnel Cluster Master Node |
+| **seatunnel-master** | `8080`, `5801` | **Apache SeaTunnel Cluster Master Node & Built-in Web Console** (`http://localhost:8080`) |
 | **seatunnel-worker-1** | internal | Apache SeaTunnel Execution Worker Node |
 
 ---
@@ -20,8 +19,8 @@ Navigate to the `seatunnel/` directory and run:
 docker compose up -d
 ```
 
-Access the **SeaTunnel Management Web UI** at:
-👉 **`http://localhost:8888`**
+Access the **SeaTunnel Built-in Web Console & REST API** at:
+👉 **`http://localhost:8080`**
 
 Check status:
 
@@ -34,4 +33,4 @@ docker compose ps
 ## 🔗 Integration with Schema Evolution Core
 
 - **Schema Evolution Engine**: Monitors source changes and executes DDL operations (`ALTER TABLE ... ADD COLUMN ...`) on Data Warehouse Target.
-- **Apache SeaTunnel Web & Engine**: High-throughput distributed data ingestion engine sinking Kafka messages into Target Warehouse.
+- **Apache SeaTunnel**: Distributed data ingestion engine sinking Kafka messages into Target Warehouse.
