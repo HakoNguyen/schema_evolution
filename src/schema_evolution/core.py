@@ -239,15 +239,22 @@ def _serialize_value(v):
 
 
 def _serialize_change(change: SchemaChange) -> dict:
-    # Chỉ dùng để hiển thị trên Streamlit UI, KHÔNG dùng để deserialize
+    # Chỉ dùng để hiển thị trên Streamlit / Web UI, KHÔNG dùng để deserialize
     # lại thành SchemaChange — bản schema đầy đủ đã có trong table_schema.
+    old_val = _serialize_value(change.old_value)
+    new_val = _serialize_value(change.new_value)
+    
+    if change.change_type == ChangeType.RENAME_COLUMN:
+        old_val = change.column_name
+        new_val = change.new_value.name if hasattr(change.new_value, 'name') else str(change.new_value)
+
     return {
         "change_type": change.change_type.value,
         "severity": change.severity.value,
         "column_name": change.column_name,
         "constraint_name": change.constraint_name,
-        "old_value": _serialize_value(change.old_value),
-        "new_value": _serialize_value(change.new_value),
+        "old_value": old_val,
+        "new_value": new_val,
     }
 
 
@@ -286,48 +293,73 @@ def _classify_type_change(old_col: ColumnSchema, new_col: ColumnSchema) -> Chang
     return ChangeType.CHANGE_TYPE_INCOMPATIBLE
 
 
+def _detect_rename_candidates(
+    missing_in_new: dict[str, ColumnSchema],
+    added_in_new: dict[str, ColumnSchema],
+    table_name: str
+) -> tuple[list[SchemaChange], set[str], set[str]]:
+    """
+    Suy luận các cặp cột cũ biến mất và cột mới xuất hiện có thể là thao tác RENAME_COLUMN.
+    Trả về (rename_changes, matched_old_names, matched_new_names).
+    """
+    rename_changes: list[SchemaChange] = []
+    matched_old: set[str] = set()
+    matched_new: set[str] = set()
+
+    for old_name, old_col in missing_in_new.items():
+        if old_name in matched_old:
+            continue
+        for new_name, new_col in added_in_new.items():
+            if new_name in matched_new:
+                continue
+
+            # Điều kiện 1: Trùng data_type (hoặc cùng họ kiểu dữ liệu)
+            type_match = (
+                old_col.data_type == new_col.data_type
+                or TYPE_TO_FAMILY.get(old_col.data_type) == TYPE_TO_FAMILY.get(new_col.data_type)
+            )
+            # Điều kiện 2: Trùng nullability
+            nullable_match = (old_col.nullable == new_col.nullable)
+
+            if type_match and nullable_match:
+                rename_changes.append(
+                    SchemaChange(
+                        table_name=table_name,
+                        change_type=ChangeType.RENAME_COLUMN,
+                        severity=CHANGE_SEVERITY_MAP[ChangeType.RENAME_COLUMN],
+                        column_name=old_name,
+                        old_value=old_col,
+                        new_value=new_col,
+                    )
+                )
+                matched_old.add(old_name)
+                matched_new.add(new_name)
+                break
+
+    return rename_changes, matched_old, matched_new
+
+
 def compare_schemas(old: TableSchema, new: TableSchema) -> list[SchemaChange]:
     """
     So sánh 2 TableSchema (old = Registry, new = crawl trực tiếp từ
     Source), trả về list[SchemaChange] mô tả tất cả khác biệt.
-
-    Gợi ý thuật toán (theo 3 nhóm, làm tuần tự để dễ test riêng từng nhóm):
-
-    1. So sánh columns (theo tên):
-       - Cột có trong new, không có trong old -> ADD_COLUMN
-       - Cột có trong old, không có trong new -> DROP_COLUMN
-         (v1: KHÔNG cố suy luận rename, xem phần ghi chú ở đầu file)
-       - Cột có ở cả 2, khác nhau ở:
-           - data_type -> WIDEN_TYPE / NARROW_TYPE / CHANGE_TYPE_INCOMPATIBLE
-             (quyết định logic so sánh "rộng hơn hay hẹp hơn" —
-             gợi ý: chỉ so sánh được trong cùng 1 họ type, VD so
-             max_length nếu cùng là varchar; khác họ type hẳn thì luôn
-             là CHANGE_TYPE_INCOMPATIBLE)
-           - nullable: True->False = NULLABLE_TO_NOT_NULL,
-             False->True = NOT_NULL_TO_NULLABLE
-
-    2. So sánh primary_key (list[str]):
-       - old rỗng, new có -> ADD_PRIMARY_KEY
-       - old có, new rỗng -> DROP_PRIMARY_KEY
-       - cả 2 đều có nhưng khác nội dung -> CHANGE_PRIMARY_KEY
-
-    3. So sánh foreign_keys (theo constraint_name):
-       - có trong new, không có trong old -> ADD_FOREIGN_KEY
-       - có trong old, không có trong new -> DROP_FOREIGN_KEY
-       - cùng constraint_name nhưng khác ref_table/ref_column
-         -> CHANGE_FOREIGN_KEY_TARGET
-       - cùng constraint_name nhưng khác on_delete/on_update
-         -> CHANGE_FOREIGN_KEY_ACTION
-
-    Mỗi SchemaChange tạo ra cần gán severity từ CHANGE_SEVERITY_MAP,
-    không tự quyết định severity rải rác trong hàm này.
     """
     changes: list[SchemaChange] = []
     old_cols = {c.name: c for c in old.columns}
     new_cols = {c.name: c for c in new.columns}
 
-    for name, col in new_cols.items():
-        if name not in old_cols:
+    missing_in_new = {name: c for name, c in old_cols.items() if name not in new_cols}
+    added_in_new = {name: c for name, c in new_cols.items() if name not in old_cols}
+
+    # 1. Suy luận đổi tên cột (RENAME_COLUMN) bằng Heuristic
+    rename_changes, matched_old, matched_new = _detect_rename_candidates(
+        missing_in_new, added_in_new, new.table_name
+    )
+    changes.extend(rename_changes)
+
+    # 2. Xử lý các cột thêm mới thực sự (ADD_COLUMN)
+    for name, col in added_in_new.items():
+        if name not in matched_new:
             changes.append(SchemaChange(
                 table_name=new.table_name,
                 change_type=ChangeType.ADD_COLUMN,
@@ -337,8 +369,9 @@ def compare_schemas(old: TableSchema, new: TableSchema) -> list[SchemaChange]:
                 new_value=col,
             ))
 
-    for name, col in old_cols.items():
-        if name not in new_cols:
+    # 3. Xử lý các cột bị xóa thực sự (DROP_COLUMN)
+    for name, col in missing_in_new.items():
+        if name not in matched_old:
             changes.append(SchemaChange(
                 table_name=old.table_name,
                 change_type=ChangeType.DROP_COLUMN,
@@ -475,9 +508,16 @@ def _merge_schema(base: TableSchema, applied_changes: list[SchemaChange]) -> Tab
     for change in applied_changes:
         if change.change_type == ChangeType.ADD_COLUMN:
             merged.columns.append(change.new_value)
+        elif change.change_type == ChangeType.RENAME_COLUMN:
+            old_name = change.column_name
+            new_col = change.new_value
+            merged.columns = [
+                new_col if c.name == old_name else c
+                for c in merged.columns
+            ]
         elif change.change_type == ChangeType.WIDEN_TYPE:
             col = cols_by_name.get(change.column_name)
-            if col is not None:
+            if col is not None and change.new_value is not None:
                 col.data_type = change.new_value.data_type
                 col.max_length = change.new_value.max_length
         elif change.change_type == ChangeType.NOT_NULL_TO_NULLABLE:

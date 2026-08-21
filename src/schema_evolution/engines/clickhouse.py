@@ -187,6 +187,12 @@ class ClickHouseEngine(BaseEngine):
             # --- Các loại BREAKING dưới đây chỉ dùng khi Approve (sau khi
             # kỹ sư đã duyệt) — không bao giờ được apply_non_breaking_changes
             # gọi tới trong luồng auto-sync thông thường. ---
+            elif change.change_type == ChangeType.RENAME_COLUMN:
+                old_name = change.column_name
+                new_name = change.new_value.name if hasattr(change.new_value, 'name') else str(change.new_value)
+                statements.append(
+                    f"ALTER TABLE {change.table_name} RENAME COLUMN {old_name} TO {new_name}"
+                )
             elif change.change_type == ChangeType.DROP_COLUMN:
                 statements.append(
                     f"ALTER TABLE {change.table_name} DROP COLUMN {change.column_name}"
