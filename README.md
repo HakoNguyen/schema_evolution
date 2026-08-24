@@ -171,6 +171,25 @@ npm run dev
 ```
 Access the Web App Dashboard at: 👉 **`http://localhost:5173`**
 
+### 5. (Alternative) Professional Enterprise Terminal CLI
+In addition to the Web Dashboard and Telegram Bot, you can launch a clean, professional interactive terminal menu to inspect, approve, or reject schemas directly:
+
+```bash
+# Launch via convenient shortcut command
+schema-check
+
+# Or via Python module
+python -m app.cli
+```
+
+*Interactive Menu Options (0-6):*
+- `[1]` List All Monitored Tables & Active Baselines
+- `[2]` List Frozen Tables Pending Approval
+- `[3]` Inspect Draft DDL & Breaking Changes Details
+- `[4]` Approve Schema Change & Execute DDL on Target DB
+- `[5]` Reject Schema Change & Retain Previous Baseline
+- `[6]` View System Topology & Pipeline Configurations
+
 ---
 
 ## 📊 Supported Databases & Type Mapping
