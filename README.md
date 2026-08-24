@@ -41,34 +41,55 @@ In modern enterprise data platforms, backend developers frequently modify source
 
 ## 🏛️ Architecture Topology
 
+![Architecture Topology Diagram](docs/images/architecture_topology.png)
+
 ```mermaid
-graph TD
-    subgraph "1. Source Databases (CDC / Change Stream)"
-        PG[(PostgreSQL 5431)]
-        MY[(MySQL 3306)]
-        MG[(MongoDB 27017)]
+graph LR
+    subgraph S1["1. Source Databases"]
+        PG[("PostgreSQL (5431)")]
+        MY[("MySQL (3306)")]
+        MG[("MongoDB (27017)")]
     end
 
-    subgraph "2. Event Streaming Bus (Kafka / Redpanda)"
-        PG & MY & MG -->|Debezium Connectors| K[Redpanda Kafka Broker]
+    subgraph S2["2. Event Streaming Bus"]
+        K["Redpanda / Kafka Broker (19092)"]
     end
 
-    subgraph "3. Schema Evolution Core (Dự án này)"
-        K -->|Lắng nghe DDL & Payload Events| E[FastAPI Core Engine]
-        E -->|Phân loại Change Severity| C{Impact Assessment}
-        C -->|Non-breaking < 0.5s| AUTO[Auto DDL Execution Engine]
-        C -->|Breaking Risk| FREEZE[Freeze Pipeline & Alert Telegram]
-        FREEZE --> SANDBOX[Sandbox Isolated Testing]
-        SANDBOX -->|Approval| AUTO
+    subgraph S3["3. Schema Evolution Core"]
+        E["FastAPI Core Engine"]
+        C{"Impact Assessment"}
+        AUTO["Auto DDL Engine"]
+        FREEZE["Pipeline Freeze & Telegram Alert"]
     end
 
-    subgraph "4. Data Ingestion & Target Warehouses"
-        AUTO -->|ALTER TABLE| CH[(ClickHouse Warehouse 8123)]
-        AUTO -->|ALTER TABLE| TGT[(MySQL Target 3306)]
-        K -->|Data Rows Ingestion| ST[Apache SeaTunnel / Sink Connectors]
-        ST -->|INSERT Data Rows| CH
+    subgraph S4["4. Target Warehouses"]
+        CH[("ClickHouse (8123)")]
+        TGT[("MySQL Target (3306)")]
     end
+
+    PG & MY & MG -->|Debezium CDC| K
+    K -->|DDL & Payload Events| E
+    E --> C
+    C -->|Non-Breaking (<0.5s)| AUTO
+    C -->|Breaking Risk| FREEZE
+    AUTO -->|ALTER TABLE| CH & TGT
+
+    style S1 fill:#f8f9fa,stroke:#6c757d,stroke-width:1px
+    style S2 fill:#fff3cd,stroke:#ffc107,stroke-width:1px
+    style S3 fill:#e2e3e5,stroke:#343a40,stroke-width:1px
+    style S4 fill:#d1e7dd,stroke:#198754,stroke-width:1px
 ```
+
+### 🧰 Technology Stack Ecosystem
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18+-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![Redpanda](https://img.shields.io/badge/Redpanda_Kafka-CDC-FF2E00?style=for-the-badge&logo=redpanda&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB-6.0+-47A248?style=for-the-badge&logo=mongodb&logoColor=white)
+![ClickHouse](https://img.shields.io/badge/ClickHouse-23.8+-FFCC00?style=for-the-badge&logo=clickhouse&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
 ---
 
