@@ -175,15 +175,15 @@ Access the Web App Dashboard at: 👉 **`http://localhost:5173`**
 
 ## 📊 Supported Databases & Type Mapping
 
-| Generic Type | PostgreSQL | MySQL | MongoDB | ClickHouse |
+| Generic Type | PostgreSQL | MySQL | MongoDB | ClickHouse *(bọc `Nullable(...)` nếu nullable=True)* |
 | :--- | :--- | :--- | :--- | :--- |
-| **`int`** | `INTEGER` | `INT` | `Int32` | `Nullable(Int32)` |
-| **`bigint`** | `BIGINT` | `BIGINT` | `Int64` | `Nullable(Int64)` |
-| **`double`** | `DOUBLE PRECISION` | `DOUBLE` | `Double` | `Nullable(Float64)` |
-| **`boolean`** | `BOOLEAN` | `TINYINT(1)` | `Bool` | `Nullable(Bool)` |
-| **`timestamp`** | `TIMESTAMP` | `DATETIME` | `Date` | `Nullable(DateTime)` |
-| **`varchar`** | `VARCHAR(255)` | `VARCHAR(255)` | `String` | `Nullable(String)` |
-| **`text`** | `TEXT` | `TEXT` | `String` | `Nullable(String)` |
+| **`int`** | `INTEGER` | `INT` | `Int32` | `Int32` |
+| **`bigint`** | `BIGINT` | `BIGINT` | `Int64` | `Int64` |
+| **`double`** | `DOUBLE PRECISION` | `DOUBLE` | `Double` | `Float64` |
+| **`boolean`** | `BOOLEAN` | `TINYINT(1)` | `Bool` | `Bool` |
+| **`timestamp`** | `TIMESTAMP` | `DATETIME` | `Date` | `DateTime` |
+| **`varchar`** | `VARCHAR(255)` | `VARCHAR(255)` | `String` | `String` |
+| **`text`** | `TEXT` | `TEXT` | `String` | `String` |
 
 ---
 

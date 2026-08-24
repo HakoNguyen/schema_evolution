@@ -76,3 +76,47 @@ tables:
 > Lưu ý từ khoá tên Database giữa các Engine:
 > - Postgres dùng: `dbname`
 > - MySQL, ClickHouse, Mongo dùng: `database`
+
+---
+
+## 3. Cấu hình Kết nối Kafka & Multi-Cluster CDC Events
+
+Hệ thống Schema Evolution tích hợp cơ chế lắng nghe sự kiện CDC Real-time thông qua Kafka / Redpanda Bus.
+
+### A. Cấu hình Kafka Mặc định (`config/main.yaml`)
+Bạn có thể trỏ địa chỉ Kafka Broker về Server địa phương hoặc Server ở xa trong file `config/main.yaml`:
+
+```yaml
+kafka:
+  # Địa chỉ Kafka Broker (có thể khai báo 1 IP hoặc cụm cluster cách nhau bởi dấu phẩy)
+  bootstrap_servers: "localhost:19092"
+  group_id: "schema-evolution-group"
+
+  # (Tùy chọn) Bổ sung nếu Kafka Server ở xa bật bảo mật SASL/SSL
+  # security_protocol: "SASL_PLAINTEXT"
+  # sasl_mechanism: "PLAIN"
+  # sasl_plain_username: "my_user"
+  # sasl_plain_password: "my_password"
+```
+
+### B. Cấu hình Kết nối Nhiều Kafka Cluster Cùng Lúc (Multi-Kafka Cluster)
+Nếu hệ thống của bạn cần đồng bộ dữ liệu từ **nhiều cụm Kafka Server khác nhau** (ví dụ: Cluster A tại Hà Nội, Cluster B tại TP.HCM), bạn chỉ cần khai báo đè mục `kafka:` vào từng file pipeline riêng biệt trong `config/pipelines/<pipeline_name>.yaml`:
+
+```yaml
+name: "pg_to_mysql"
+kafka:
+  bootstrap_servers: "192.168.1.50:9092"   # Trỏ riêng tới Kafka Cluster của chi nhánh
+  group_id: "pg-cluster-group"
+
+source:
+  type: "postgres"
+  ...
+```
+
+> [!NOTE]
+> Khi chạy `python -m app.kafka_consumer`, hệ thống sẽ tự động phân nhóm và khởi tạo các **Thread Worker độc lập** để lắng nghe song song đồng thời từ tất cả các Kafka Cluster mà bạn đã khai báo!
+
+### C. Khởi chạy Kafka Consumer Background Worker
+```powershell
+python -m app.kafka_consumer
+```
