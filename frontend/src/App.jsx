@@ -6,19 +6,28 @@ import PendingApproval from './components/PendingApproval';
 import EditSchema from './components/EditSchema';
 import PipelineTopology from './components/PipelineTopology';
 import LiveEventStream from './components/LiveEventStream';
+import PipelineConfig from './components/PipelineConfig';
+import { useToast } from './components/NotificationToast';
 
 function App() {
   const [tables, setTables] = useState([]);
-  const [activePage, setActivePage] = useState('monitored_tables'); // 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'edit_schema'
+  const [activePage, setActivePage] = useState('monitored_tables'); // 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
   const [selectedKey, setSelectedKey] = useState(null);
   const [details, setDetails] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const { addToast } = useToast();
 
   const fetchTables = () => {
     fetch('/api/tables')
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error("HTTP error " + res.status);
+        return res.json();
+      })
       .then(data => setTables(data))
-      .catch(err => console.error("Error fetching tables", err));
+      .catch(err => {
+        console.error("Error fetching tables", err);
+        addToast("Không thể tải danh sách bảng từ backend API", "error");
+      });
   };
 
   useEffect(() => {
@@ -31,12 +40,19 @@ function App() {
       return;
     }
     fetch(`/api/tables/${selectedKey}`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error("HTTP error " + res.status);
+        return res.json();
+      })
       .then(data => setDetails(data))
-      .catch(err => console.error("Error fetching details", err));
+      .catch(err => {
+        console.error("Error fetching details", err);
+        addToast("Không thể tải chi tiết bảng dữ liệu", "error");
+      });
   }, [selectedKey, refreshTrigger]);
 
   const selectedTable = selectedKey ? tables.find(t => t.registry_key === selectedKey) : null;
+
 
   return (
     <div className="app-container">
@@ -55,6 +71,7 @@ function App() {
             {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> Monitored Tables</span>}
             {activePage === 'pipeline_topology' && <span className="highlight"> Pipeline Topology</span>}
             {activePage === 'live_events' && <span className="highlight"> Live CDC Stream</span>}
+            {activePage === 'pipeline_config' && <span className="highlight"> Pipeline & System Config</span>}
             {activePage === 'edit_schema' && <span className="highlight"> Edit Schema</span>}
             {activePage === 'monitored_tables' && selectedKey && selectedTable && (
               <>
@@ -71,6 +88,9 @@ function App() {
 
           {/* PAGE: Live CDC Stream */}
           {activePage === 'live_events' && <LiveEventStream />}
+
+          {/* PAGE: Pipeline & System Config */}
+          {activePage === 'pipeline_config' && <PipelineConfig />}
 
           {/* PAGE: Edit Schema */}
           {activePage === 'edit_schema' && <EditSchema tables={tables} onDeploySuccess={() => setActivePage('monitored_tables')} />}

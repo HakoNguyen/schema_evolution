@@ -84,7 +84,7 @@ def run_cycle(
             if target_engine is not None:
                 ensure_connected(target_engine)
         except Exception as e: 
-            print(f"[scheduler] Không kết nối được '{name}': {e}")
+            print(f"[scheduler] Khong ket noi duoc '{name}': {e}")
             continue
 
         for table_name in tables: 
@@ -96,7 +96,7 @@ def run_cycle(
                 )
                 print(f"[scheduler] {name}.{table_name}: {result['status']}")
             except Exception as e:
-                print(f"[scheduler] Lỗi khi quét {name}.{table_name}: {e}")
+                print(f"[scheduler] Loi khi quet {name}.{table_name}: {e}")
         
 def main(config_path: str = "config/main.yaml") -> None:
     if __name__ == "__main__" and len(sys.argv) > 1:
@@ -128,7 +128,7 @@ def main(config_path: str = "config/main.yaml") -> None:
                     engine.disconnect()
                 except Exception:
                     pass
-        print("[scheduler] Đã dừng.")
+        print("[scheduler] Da dung.")
 
 if __name__ == "__main__":
     main()

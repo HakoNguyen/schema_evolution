@@ -1,11 +1,12 @@
 import React from 'react';
-import { Database, Network, Zap, LayoutTemplate } from 'lucide-react';
+import { Database, Network, Zap, LayoutTemplate, Sliders } from 'lucide-react';
 
 export default function Sidebar({ activePage, setActivePage }) {
   const menuItems = [
     { id: 'monitored_tables', label: 'Task/Flow Monitor', icon: <Database size={18} /> },
     { id: 'pipeline_topology', label: 'Pipeline Topology', icon: <Network size={18} /> },
     { id: 'live_events', label: 'Live CDC Stream', icon: <Zap size={18} /> },
+    { id: 'pipeline_config', label: 'Pipeline Config', icon: <Sliders size={18} /> },
     { id: 'edit_schema', label: 'Schema Editor', icon: <LayoutTemplate size={18} /> },
   ];
 

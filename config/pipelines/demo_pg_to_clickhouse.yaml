@@ -1,0 +1,18 @@
+name: demo_pg_to_clickhouse
+source:
+  config:
+    database: shop_db
+    host: localhost
+    port: 5432
+  type: postgres
+tables:
+- users
+- orders
+- products
+target:
+  config:
+    database: default
+    host: localhost
+    port: 8123
+    user: default
+  type: clickhouse

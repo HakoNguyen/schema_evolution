@@ -41,43 +41,50 @@ In modern enterprise data platforms, backend developers frequently modify source
 
 ## 🏛️ Architecture Topology
 
-![Architecture Topology Diagram](docs/images/architecture_topology.png)
-
 ```mermaid
 graph LR
-    subgraph S1["1. Source Databases"]
-        PG[("PostgreSQL (5431)")]
-        MY[("MySQL (3306)")]
-        MG[("MongoDB (27017)")]
+    subgraph SOURCES["1. Source Databases"]
+        PG[("PostgreSQL")]
+        MY[("MySQL")]
+        MG[("MongoDB")]
     end
 
-    subgraph S2["2. Event Streaming Bus"]
-        K["Redpanda / Kafka Broker (19092)"]
+    subgraph BUS["2. Event Streaming Bus"]
+        K["Redpanda / Kafka Broker"]
     end
 
-    subgraph S3["3. Schema Evolution Core"]
+    subgraph CONTROL["3. Control Plane (Schema Evolution Engine)"]
         E["FastAPI Core Engine"]
         C{"Impact Assessment"}
         AUTO["Auto DDL Engine"]
         FREEZE["Pipeline Freeze & Telegram Alert"]
     end
 
-    subgraph S4["4. Target Warehouses"]
-        CH[("ClickHouse (8123)")]
-        TGT[("MySQL Target (3306)")]
+    subgraph DATA["4. Data Plane (Row Ingestion Cluster)"]
+        ST["Apache SeaTunnel / Sink Connectors"]
+    end
+
+    subgraph TARGETS["5. Target Warehouses"]
+        CH[("ClickHouse Warehouse")]
+        TGT[("MySQL Target DB")]
     end
 
     PG & MY & MG -->|Debezium CDC| K
-    K -->|DDL & Payload Events| E
-    E --> C
-    C -->|Non-Breaking (<0.5s)| AUTO
-    C -->|Breaking Risk| FREEZE
-    AUTO -->|ALTER TABLE| CH & TGT
 
-    style S1 fill:#f8f9fa,stroke:#6c757d,stroke-width:1px
-    style S2 fill:#fff3cd,stroke:#ffc107,stroke-width:1px
-    style S3 fill:#e2e3e5,stroke:#343a40,stroke-width:1px
-    style S4 fill:#d1e7dd,stroke:#198754,stroke-width:1px
+    %% Parallel Control Plane Flow (DDL & Schema Evolution)
+    K -->|"DDL Events"| E
+    E --> C
+    C -->|"Non-Breaking"| AUTO
+    C -->|"Breaking Risk"| FREEZE
+    AUTO -->|"ALTER TABLE (DDL)"| CH & TGT
+
+    %% Parallel Data Plane Flow (Row Ingestion)
+    K -->|"Data Rows Stream"| ST
+    ST -->|"INSERT Rows"| CH & TGT
+
+    style CONTROL fill:#f8f9fa,stroke:#0d6efd,stroke-width:2px
+    style DATA fill:#fff3cd,stroke:#ffc107,stroke-width:2px
+    style TARGETS fill:#d1e7dd,stroke:#198754,stroke-width:2px
 ```
 
 ### 🧰 Technology Stack Ecosystem

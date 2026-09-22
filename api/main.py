@@ -166,7 +166,10 @@ def get_tables():
         pair_name = pair["name"]
         source_type = pair.get("source", {}).get("type", "unknown")
         target_type = pair.get("target", {}).get("type", "none")
-        mode = f"Đồng bộ {source_type} → {target_type}" if "target" in pair else "Chỉ phát hiện"
+        is_sync = "target" in pair and target_type not in (None, "none")
+        mode = f"Đồng bộ {source_type.upper()} → {target_type.upper()}" if is_sync else f"Chỉ theo dõi Nguồn ({source_type.upper()})"
+
+
         
         for table_name in pair.get("tables", []):
             registry_key = f"{pair_name}/{table_name}"
@@ -341,4 +344,83 @@ def edit_schema(registry_key: str, payload: dict):
         
     from api.schema_editor import apply_web_edit
     return apply_web_edit(registry_key, columns_data, registry)
+
+# ==============================================================================
+# PIPELINE & SYSTEM CONFIGURATION APIs (READ/WRITE YAML FILES ON DISK)
+# ==============================================================================
+
+@app.get("/api/config/system")
+def get_system_config():
+    config_path = Path("config/main.yaml")
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="config/main.yaml not found")
+    with open(config_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+@app.put("/api/config/system")
+def update_system_config(payload: dict):
+    config_path = Path("config/main.yaml")
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(payload, f, allow_unicode=True, default_flow_style=False)
+        return {"status": "success", "message": "Cấu hình hệ thống đã được lưu vào config/main.yaml"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Không thể lưu main.yaml: {str(e)}")
+
+@app.get("/api/config/pipelines")
+def get_pipelines_config():
+    pipelines_dir = Path("config/pipelines")
+    if not pipelines_dir.exists():
+        return []
+    res = []
+    for p_file in sorted(pipelines_dir.glob("*.yaml")):
+        with open(p_file, "r", encoding="utf-8") as pf:
+            cfg = yaml.safe_load(pf)
+            if cfg:
+                cfg["_filename"] = p_file.name
+                res.append(cfg)
+    return res
+
+@app.post("/api/config/pipelines")
+def create_pipeline_config(payload: dict):
+    name = payload.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="Thiếu tên pipeline (name)")
+    
+    clean_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
+    
+    pipelines_dir = Path("config/pipelines")
+    pipelines_dir.mkdir(parents=True, exist_ok=True)
+    target_file = pipelines_dir / f"{name}.yaml"
+    
+    try:
+        with open(target_file, "w", encoding="utf-8") as f:
+            yaml.dump(clean_payload, f, allow_unicode=True, default_flow_style=False)
+        return {"status": "success", "filename": target_file.name, "message": f"Đã lưu pipeline vào {target_file.name}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Không thể tạo pipeline yaml: {str(e)}")
+
+@app.put("/api/config/pipelines/{name}")
+def update_pipeline_config(name: str, payload: dict):
+    pipelines_dir = Path("config/pipelines")
+    target_file = pipelines_dir / f"{name}.yaml"
+    
+    clean_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
+    
+    try:
+        with open(target_file, "w", encoding="utf-8") as f:
+            yaml.dump(clean_payload, f, allow_unicode=True, default_flow_style=False)
+        return {"status": "success", "filename": target_file.name, "message": f"Đã cập nhật pipeline {target_file.name}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Không thể cập nhật pipeline yaml: {str(e)}")
+
+@app.delete("/api/config/pipelines/{name}")
+def delete_pipeline_config(name: str):
+    pipelines_dir = Path("config/pipelines")
+    target_file = pipelines_dir / f"{name}.yaml"
+    if target_file.exists():
+        target_file.unlink()
+        return {"status": "success", "message": f"Đã xóa pipeline {name}.yaml"}
+    raise HTTPException(status_code=404, detail=f"Không tìm thấy file {name}.yaml")
+
 
