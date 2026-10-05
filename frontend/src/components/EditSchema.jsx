@@ -77,16 +77,16 @@ export default function EditSchema({ tables, onDeploySuccess }) {
 
 
   return (
-    <div style={{ background: '#151d2a', border: '1px solid #1e293b', borderRadius: '10px', overflow: 'hidden' }}>
-      <div style={{ padding: '20px 24px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d131f' }}>
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
+      <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card-bg)' }}>
         <div>
-          <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 700, color: '#f8fafc' }}>Low-Code Schema Editor</h3>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: '#94a3b8' }}>CHỌN BẢNG DỮ LIỆU:</span>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>Schema Editor</h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Chọn bảng dữ liệu:</span>
             <select 
               value={selectedKey} 
               onChange={e => setSelectedKey(e.target.value)}
-              style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid #1e293b', background: '#0b0f17', color: '#f8fafc', minWidth: '300px', outline: 'none' }}
+              style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--body-bg)', color: 'var(--text-main)', minWidth: '260px', outline: 'none', fontSize: '0.85rem' }}
             >
               <option value="">-- Chọn bảng cần chỉnh sửa --</option>
               {tables?.map(t => (
@@ -99,50 +99,59 @@ export default function EditSchema({ tables, onDeploySuccess }) {
         </div>
         <button 
           className="btn-primary"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#38bdf8', color: '#0b0f17' }} 
+          style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '8px', 
+            background: (!selectedKey || columns.length === 0) ? 'var(--border-subtle)' : 'var(--primary-color)', 
+            color: (!selectedKey || columns.length === 0) ? 'var(--text-muted)' : '#0b0f17',
+            opacity: (!selectedKey || columns.length === 0) ? 0.5 : 1,
+            cursor: (!selectedKey || columns.length === 0) ? 'not-allowed' : 'pointer'
+          }} 
           disabled={!selectedKey || columns.length === 0} 
           onClick={handleDeploy}
         >
-          <Save size={16} /> Triển Khai Schema Mới
+          <Save size={16} /> Triển khai schema mới
         </button>
       </div>
 
-      <div style={{ padding: '24px' }}>
+      <div style={{ padding: '20px' }}>
         {!selectedKey ? (
-          <div className="no-data" style={{ padding: '40px' }}>
-            <Database size={32} style={{ opacity: 0.3, marginBottom: '12px', color: '#38bdf8' }} />
-            <p>Vui lòng chọn một bảng từ menu thả xuống ở trên để bắt đầu chỉnh sửa cấu trúc cột.</p>
+          <div className="no-data" style={{ padding: '28px', minHeight: '160px' }}>
+            <Database size={28} style={{ opacity: 0.3, marginBottom: '10px', color: 'var(--primary-color)' }} />
+            <p style={{ fontSize: '0.875rem' }}>Vui lòng chọn một bảng từ menu ở trên để bắt đầu chỉnh sửa cấu trúc cột.</p>
           </div>
         ) : loading ? (
-          <div className="no-data">Đang tải cấu trúc cột...</div>
+          <div className="no-data" style={{ minHeight: '160px' }}>Đang tải cấu trúc cột...</div>
         ) : (
           <>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               {columns.map((col) => (
-                <div key={col.id} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px 16px', background: '#0b0f17', border: '1px solid #1e293b', borderRadius: '8px' }}>
-                  <div style={{ cursor: 'grab', display: 'flex', alignItems: 'center' }}><GripVertical size={16} color="#64748b" /></div>
+                <div key={col.id} style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '10px 14px', background: 'var(--body-bg)', border: '1px solid var(--border-color)', borderRadius: '8px' }}>
+                  <div style={{ cursor: 'grab', display: 'flex', alignItems: 'center' }}><GripVertical size={16} color="var(--text-dim)" /></div>
                   
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Tên Cột</label>
+                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px' }}>Tên cột</label>
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-                      <Type size={14} style={{ position: 'absolute', left: '10px', color: '#64748b' }} />
+                      <Type size={14} style={{ position: 'absolute', left: '10px', color: 'var(--text-dim)' }} />
                       <input 
                         type="text" 
                         value={col.name} 
                         onChange={e => updateColumn(col.id, 'name', e.target.value)}
                         disabled={col.isPrimary}
-                        style={{ width: '100%', padding: '8px 12px 8px 32px', background: '#151d2a', border: '1px solid #1e293b', borderRadius: '4px', color: '#f8fafc', outline: 'none' }}
+                        style={{ width: '100%', padding: '6px 12px 6px 32px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)', outline: 'none', fontSize: '0.85rem' }}
                       />
                     </div>
                   </div>
 
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', marginBottom: '4px' }}>Kiểu Dữ Liệu</label>
+                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px' }}>Kiểu dữ liệu</label>
+
                     <select 
                       value={col.type} 
                       onChange={e => updateColumn(col.id, 'type', e.target.value)}
                       disabled={col.isPrimary}
-                      style={{ width: '100%', padding: '8px 12px', background: '#151d2a', border: '1px solid #1e293b', borderRadius: '4px', color: '#f8fafc', outline: 'none', textTransform: 'uppercase' }}
+                      style={{ width: '100%', padding: '8px 12px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)', outline: 'none', textTransform: 'uppercase' }}
                     >
                       <option value="int">INT</option>
                       <option value="bigint">BIGINT</option>
@@ -163,7 +172,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', marginTop: '18px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                       <input 
                         type="checkbox" 
                         checked={col.isPrimary} 
@@ -175,7 +184,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', marginTop: '18px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: '#94a3b8' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
                       <input 
                         type="checkbox" 
                         checked={col.nullable} 
@@ -189,7 +198,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                   <button 
                     onClick={() => removeColumn(col.id)}
                     disabled={col.isPrimary}
-                    style={{ background: 'transparent', border: 'none', color: '#f43f5e', cursor: col.isPrimary ? 'not-allowed' : 'pointer', padding: '8px', marginTop: '18px', opacity: col.isPrimary ? 0.3 : 1 }}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--danger-color)', cursor: col.isPrimary ? 'not-allowed' : 'pointer', padding: '8px', marginTop: '18px', opacity: col.isPrimary ? 0.3 : 1 }}
                   >
                     <Trash2 size={16} />
                   </button>

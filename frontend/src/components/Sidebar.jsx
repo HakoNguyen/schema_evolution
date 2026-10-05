@@ -1,13 +1,16 @@
 import React from 'react';
 import { Database, Network, Zap, LayoutTemplate, Sliders } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function Sidebar({ activePage, setActivePage }) {
+  const { t } = useLanguage();
+
   const menuItems = [
-    { id: 'monitored_tables', label: 'Task/Flow Monitor', icon: <Database size={18} /> },
-    { id: 'pipeline_topology', label: 'Pipeline Topology', icon: <Network size={18} /> },
-    { id: 'live_events', label: 'Live CDC Stream', icon: <Zap size={18} /> },
-    { id: 'pipeline_config', label: 'Pipeline Config', icon: <Sliders size={18} /> },
-    { id: 'edit_schema', label: 'Schema Editor', icon: <LayoutTemplate size={18} /> },
+    { id: 'monitored_tables', label: t('monitored_tables'), icon: <Database size={18} /> },
+    { id: 'pipeline_topology', label: t('pipeline_topology'), icon: <Network size={18} /> },
+    { id: 'live_events', label: t('live_cdc_stream'), icon: <Zap size={18} /> },
+    { id: 'pipeline_config', label: t('pipeline_config'), icon: <Sliders size={18} /> },
+    { id: 'edit_schema', label: t('schema_editor'), icon: <LayoutTemplate size={18} /> },
   ];
 
   return (
@@ -17,7 +20,7 @@ export default function Sidebar({ activePage, setActivePage }) {
       </div>
 
       <div className="sidebar-section">
-        <div className="section-title">STREAMING</div>
+        <div className="section-title">{t('streaming')}</div>
         <div className="table-list">
           {menuItems.map(item => (
             <div

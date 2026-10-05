@@ -314,9 +314,11 @@ def _detect_rename_candidates(
                 continue
 
             # Điều kiện 1: Trùng data_type (hoặc cùng họ kiểu dữ liệu)
+            old_fam = TYPE_TO_FAMILY.get(old_col.data_type)
+            new_fam = TYPE_TO_FAMILY.get(new_col.data_type)
             type_match = (
                 old_col.data_type == new_col.data_type
-                or TYPE_TO_FAMILY.get(old_col.data_type) == TYPE_TO_FAMILY.get(new_col.data_type)
+                or (old_fam is not None and old_fam == new_fam)
             )
             # Điều kiện 2: Trùng nullability
             nullable_match = (old_col.nullable == new_col.nullable)

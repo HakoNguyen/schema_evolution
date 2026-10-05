@@ -1,0 +1,30 @@
+databaseChangeLog:
+  - changeSet:
+      id: 1-create-users
+      author: antigravity
+      changes:
+        - createTable:
+            tableName: USERS
+            columns:
+              - column:
+                  name: id
+                  type: int
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(100)
+              - column:
+                  name: email
+                  type: varchar(100)
+  - changeSet:
+      id: 2-add-age-column
+      author: antigravity
+      changes:
+        - addColumn:
+            tableName: USERS
+            columns:
+              - column:
+                  name: age
+                  type: int

@@ -8,6 +8,7 @@ import PipelineTopology from './components/PipelineTopology';
 import LiveEventStream from './components/LiveEventStream';
 import PipelineConfig from './components/PipelineConfig';
 import { useToast } from './components/NotificationToast';
+import { useLanguage } from './context/LanguageContext';
 
 function App() {
   const [tables, setTables] = useState([]);
@@ -16,6 +17,7 @@ function App() {
   const [details, setDetails] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const { addToast } = useToast();
+  const { lang, toggleLanguage, t } = useLanguage();
 
   const fetchTables = () => {
     fetch('/api/tables')
@@ -53,6 +55,17 @@ function App() {
 
   const selectedTable = selectedKey ? tables.find(t => t.registry_key === selectedKey) : null;
 
+  const [theme, setTheme] = useState('dark');
+
+  const toggleTheme = () => {
+    const nextTheme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(nextTheme);
+    if (nextTheme === 'light') {
+      document.body.classList.add('theme-light');
+    } else {
+      document.body.classList.remove('theme-light');
+    }
+  };
 
   return (
     <div className="app-container">
@@ -65,20 +78,54 @@ function App() {
       />
       
       <div className="main-content">
-        <header className="main-header">
+        <header className="main-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div className="header-breadcrumbs">
-            <span>Clusters</span> / 
-            {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> Monitored Tables</span>}
-            {activePage === 'pipeline_topology' && <span className="highlight"> Pipeline Topology</span>}
-            {activePage === 'live_events' && <span className="highlight"> Live CDC Stream</span>}
-            {activePage === 'pipeline_config' && <span className="highlight"> Pipeline & System Config</span>}
-            {activePage === 'edit_schema' && <span className="highlight"> Edit Schema</span>}
+            <span>{t('clusters')}</span> / 
+            {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> {t('monitored_tables')}</span>}
+            {activePage === 'pipeline_topology' && <span className="highlight"> {t('pipeline_topology')}</span>}
+            {activePage === 'live_events' && <span className="highlight"> {t('live_cdc_stream')}</span>}
+            {activePage === 'pipeline_config' && <span className="highlight"> {t('pipeline_config')}</span>}
+            {activePage === 'edit_schema' && <span className="highlight"> {t('schema_editor')}</span>}
             {activePage === 'monitored_tables' && selectedKey && selectedTable && (
               <>
-                <span style={{ cursor: 'pointer', color: 'var(--primary-color)' }} onClick={() => setSelectedKey(null)}> Monitored Tables</span> / 
+                <span style={{ cursor: 'pointer', color: 'var(--primary-color)' }} onClick={() => setSelectedKey(null)}> {t('monitored_tables')}</span> / 
                 <span className="highlight"> {selectedTable.table_name}</span>
               </>
             )}
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <button 
+              className="btn-outline"
+              onClick={toggleLanguage}
+              style={{ 
+                fontSize: '0.8rem', 
+                padding: '5px 12px', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '6px',
+                fontWeight: 600,
+                color: 'var(--primary-color)',
+                borderColor: 'var(--primary-border)'
+              }}
+            >
+              {lang === 'en' ? '🌐 English' : '🌐 Tiếng Việt'}
+            </button>
+
+            <button 
+              className="btn-outline"
+              onClick={toggleTheme}
+              style={{ 
+                fontSize: '0.8rem', 
+                padding: '5px 12px', 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '6px',
+                fontWeight: 600
+              }}
+            >
+              {theme === 'dark' ? t('light_mode') : t('dark_mode')}
+            </button>
           </div>
         </header>
 
@@ -108,7 +155,7 @@ function App() {
                 style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px' }}
                 onClick={() => setSelectedKey(null)}
               >
-                ← Back to list
+                {t('back_to_list')}
               </button>
 
               <div className="metrics-row">

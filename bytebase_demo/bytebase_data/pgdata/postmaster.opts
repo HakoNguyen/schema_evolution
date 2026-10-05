@@ -1,0 +1,1 @@
+/usr/libexec/postgresql16/postgres "-D" "/var/opt/bytebase/pgdata" "-p" "8082" "-k" "/tmp" "-N" "500" "-h" "" "-c" "log_checkpoints=off"

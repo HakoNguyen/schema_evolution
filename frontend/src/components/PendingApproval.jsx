@@ -73,34 +73,34 @@ export default function PendingApproval({ registryKey, onResolved }) {
 
   return (
     <div style={{
-      background: '#151d2a',
-      border: '1px solid rgba(244, 63, 94, 0.4)',
-      borderLeft: '4px solid #f43f5e',
+      background: 'var(--card-bg)',
+      border: '1px solid var(--danger-border)',
+      borderLeft: '4px solid var(--danger-color)',
       borderRadius: '10px',
       padding: '24px',
       marginBottom: '24px',
-      color: '#f8fafc'
+      color: 'var(--text-main)'
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
-        <ShieldAlert color="#f43f5e" size={24} />
+        <ShieldAlert color="var(--danger-color)" size={24} />
         <div>
-          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#f43f5e' }}>
+          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger-color)' }}>
             Phát Hiện Thay Đổi Có Rủi Ro Gãy Cấu Trúc (Breaking Changes Pending Approval)
           </h3>
-          <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '4px' }}>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
             Thời gian phát hiện: {draft.detected_at ? new Date(draft.detected_at).toLocaleString() : 'N/A'}
           </div>
         </div>
       </div>
       
-      <div style={{ background: '#0b0f17', border: '1px solid #1e293b', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
+      <div style={{ background: 'var(--body-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', marginBottom: '20px' }}>
         {draft.breaking_changes && draft.breaking_changes.map((change, idx) => (
-          <div key={idx} style={{ fontSize: '0.9rem', color: '#f8fafc', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', background: 'rgba(244, 63, 94, 0.2)', color: '#f43f5e', textTransform: 'uppercase' }}>
+          <div key={idx} style={{ fontSize: '0.9rem', color: 'var(--text-main)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', background: 'var(--danger-bg)', color: 'var(--danger-color)', textTransform: 'uppercase' }}>
               {change.change_type}
             </span>
             <span>
-              tại cột/ràng buộc <code style={{ color: '#38bdf8' }}>{change.column_name || change.constraint_name || '?'}</code>
+              tại cột/ràng buộc <code style={{ color: 'var(--primary-color)' }}>{change.column_name || change.constraint_name || '?'}</code>
             </span>
           </div>
         ))}
@@ -115,9 +115,9 @@ export default function PendingApproval({ registryKey, onResolved }) {
             alignItems: 'center',
             gap: '8px',
             padding: '10px 20px',
-            background: isSandboxTested ? 'rgba(16, 185, 129, 0.2)' : '#1e293b',
-            color: isSandboxTested ? '#10b981' : '#f8fafc',
-            border: isSandboxTested ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid #334155',
+            background: isSandboxTested ? 'var(--success-bg)' : 'var(--card-bg)',
+            color: isSandboxTested ? 'var(--success-color)' : 'var(--text-main)',
+            border: isSandboxTested ? '1px solid var(--success-border)' : '1px solid var(--border-color)',
             borderRadius: '6px',
             fontWeight: 600,
             cursor: (loading || isSandboxTested) ? 'default' : 'pointer',
@@ -136,7 +136,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
             alignItems: 'center',
             gap: '8px',
             padding: '10px 24px',
-            background: '#10b981',
+            background: 'var(--success-color)',
             color: '#fff',
             border: 'none',
             borderRadius: '6px',
@@ -158,8 +158,8 @@ export default function PendingApproval({ registryKey, onResolved }) {
             gap: '8px',
             padding: '10px 20px',
             background: 'transparent',
-            color: '#f43f5e',
-            border: '1px solid rgba(244, 63, 94, 0.4)',
+            color: 'var(--danger-color)',
+            border: '1px solid var(--danger-border)',
             borderRadius: '6px',
             fontWeight: 600,
             cursor: loading ? 'not-allowed' : 'pointer',

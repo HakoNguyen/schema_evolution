@@ -25,21 +25,21 @@ export default function LiveEventStream() {
   }, [isLive]);
 
   return (
-    <div style={{ background: '#151d2a', border: '1px solid #1e293b', borderRadius: '10px', overflow: 'hidden' }}>
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
       {/* Header */}
-      <div style={{ padding: '20px 24px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#0d131f' }}>
+      <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card-bg)' }}>
         <div>
-          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Zap style={{ color: '#38bdf8' }} size={20} /> Live CDC Event Stream
+          <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Zap style={{ color: 'var(--primary-color)' }} size={20} /> Live CDC Event Stream
           </h3>
-          <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: '#94a3b8' }}>
+          <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             Luồng audit log trực tiếp bắt các sự kiện DDL / Payload CDC từ Redpanda Kafka Broker
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <span style={{ fontSize: '0.8rem', color: '#94a3b8', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isLive ? '#10b981' : '#64748b' }}></span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isLive ? 'var(--success-color)' : 'var(--text-dim)' }}></span>
             {isLive ? 'Real-Time Streaming Active' : 'Paused'}
           </span>
           <button 
@@ -47,55 +47,63 @@ export default function LiveEventStream() {
             style={{ padding: '6px 14px', fontSize: '0.8rem' }}
             onClick={() => setIsLive(!isLive)}
           >
-            {isLive ? 'Tạm Dừng' : 'Tiếp Tục Stream'}
+            {isLive ? 'Tạm dừng' : 'Tiếp tục stream'}
           </button>
         </div>
       </div>
 
       {/* Events Stream List */}
-      <div style={{ padding: '24px' }}>
+      <div style={{ padding: '20px' }}>
         {events.length === 0 ? (
-          <div className="no-data">Đang lắng nghe sự kiện CDC thời gian thực...</div>
+          <div className="no-data" style={{ padding: '28px', minHeight: '180px' }}>
+            <Activity size={28} style={{ opacity: 0.3, marginBottom: '10px', color: 'var(--primary-color)' }} className="spin" />
+            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
+              Đang lắng nghe sự kiện CDC thời gian thực
+            </div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', maxWidth: '420px' }}>
+              Hệ thống đang kết nối tới Redpanda Broker topic. Sự kiện thay đổi DDL/Schema từ Database Nguồn sẽ tự động xuất hiện tại đây.
+            </div>
+          </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {events.map((evt, idx) => {
               const isBreaking = evt.type === 'breaking' || evt.status === 'breaking_detected';
               const isNonBreaking = evt.type === 'non_breaking' || evt.status === 'auto_applied';
 
               return (
                 <div key={idx} style={{
-                  background: '#0b0f17',
-                  border: isBreaking ? '1px solid rgba(244, 63, 94, 0.3)' : isNonBreaking ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid #1e293b',
-                  borderLeft: isBreaking ? '4px solid #f43f5e' : isNonBreaking ? '4px solid #10b981' : '4px solid #38bdf8',
+                  background: 'var(--body-bg)',
+                  border: isBreaking ? '1px solid var(--danger-border)' : isNonBreaking ? '1px solid var(--success-border)' : '1px solid var(--border-color)',
+                  borderLeft: isBreaking ? '4px solid var(--danger-color)' : isNonBreaking ? '4px solid var(--success-color)' : '4px solid var(--primary-color)',
                   borderRadius: '8px',
-                  padding: '16px 20px',
+                  padding: '14px 18px',
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center'
                 }}>
                   <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
                       <span style={{
                         fontSize: '0.7rem',
                         fontWeight: 700,
                         padding: '2px 8px',
                         borderRadius: '4px',
                         textTransform: 'uppercase',
-                        background: isBreaking ? 'rgba(244, 63, 94, 0.2)' : 'rgba(16, 185, 129, 0.2)',
-                        color: isBreaking ? '#f43f5e' : '#10b981'
+                        background: isBreaking ? 'var(--danger-bg)' : 'var(--success-bg)',
+                        color: isBreaking ? 'var(--danger-color)' : 'var(--success-color)'
                       }}>
-                        {isBreaking ? 'BREAKING CHANGE' : 'AUTO SYNCED'}
+                        {isBreaking ? 'Cần phê duyệt' : 'Tự động đồng bộ'}
                       </span>
-                      <strong style={{ color: '#f8fafc', fontSize: '0.9rem' }}>{evt.table || evt.table_name || 'CDC Event'}</strong>
-                      <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Pipeline: <code style={{ color: '#38bdf8' }}>{evt.pipeline || 'default'}</code></span>
+                      <strong style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{evt.table || evt.table_name || 'CDC Event'}</strong>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pipeline: <code style={{ color: 'var(--primary-color)' }}>{evt.pipeline || 'default'}</code></span>
                     </div>
 
-                    <div style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
                       {evt.detail || evt.message || JSON.stringify(evt.changes || {})}
                     </div>
                   </div>
 
-                  <div style={{ textAlign: 'right', fontSize: '0.75rem', color: '#64748b', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Clock size={12} /> {evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : 'Vừa xong'}
                   </div>
                 </div>
@@ -107,3 +115,4 @@ export default function LiveEventStream() {
     </div>
   );
 }
+

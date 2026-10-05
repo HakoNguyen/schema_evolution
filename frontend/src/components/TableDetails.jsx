@@ -37,24 +37,24 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
   const displaySchema = versionDetails ? versionDetails.schema : currentSchema;
   
   return (
-    <div style={{ background: '#151d2a', border: '1px solid #1e293b', borderRadius: '10px', padding: '24px', color: '#f8fafc' }}>
+    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '24px', color: 'var(--text-main)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: '#f8fafc' }}>
+        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
           Cấu Trúc Schema {versionDetails ? `(Phiên bản ${selectedVersion})` : `(Hiện tại v${details.version})`}
         </h3>
 
         {versions.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <History size={16} style={{ color: '#38bdf8' }} />
+            <History size={16} style={{ color: 'var(--primary-color)' }} />
             <select 
               value={selectedVersion || ''} 
               onChange={e => setSelectedVersion(e.target.value === '' ? null : Number(e.target.value))}
               style={{
                 padding: '6px 12px',
-                background: '#0b0f17',
-                border: '1px solid #1e293b',
+                background: 'var(--body-bg)',
+                border: '1px solid var(--border-color)',
                 borderRadius: '6px',
-                color: '#f8fafc',
+                color: 'var(--text-main)',
                 fontSize: '0.85rem',
                 outline: 'none'
               }}
@@ -83,30 +83,30 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
           <tbody>
             {displaySchema.columns.map(col => (
               <tr key={col.name}>
-                <td><strong style={{ color: '#38bdf8' }}>{col.name}</strong></td>
+                <td><strong style={{ color: 'var(--primary-color)' }}>{col.name}</strong></td>
                 <td><code>{col.data_type}{col.max_length ? `(${col.max_length})` : ''}</code></td>
-                <td>{col.nullable ? <span style={{ color: '#10b981' }}>✔ YES</span> : <span style={{ color: '#f43f5e', fontWeight: 600 }}>✘ NOT NULL</span>}</td>
-                <td style={{ color: '#94a3b8' }}>{col.default !== null ? col.default : '—'}</td>
+                <td>{col.nullable ? <span style={{ color: 'var(--success-color)' }}>✔ YES</span> : <span style={{ color: 'var(--danger-color)', fontWeight: 600 }}>✘ NOT NULL</span>}</td>
+                <td style={{ color: 'var(--text-muted)' }}>{col.default !== null ? col.default : '—'}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <div style={{ background: '#0b0f17', padding: '16px', borderRadius: '8px', border: '1px solid #1e293b' }}>
+      <div style={{ background: 'var(--body-bg)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
         {displaySchema.primary_key && displaySchema.primary_key.length > 0 && (
-          <div style={{ fontSize: '0.85rem', marginBottom: '8px', color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Key size={14} style={{ color: '#f59e0b' }} />
-            <strong style={{ color: '#f59e0b' }}>Khóa Chính (Primary Key):</strong> <code style={{ color: '#f8fafc' }}>{displaySchema.primary_key.join(', ')}</code>
+          <div style={{ fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Key size={14} style={{ color: 'var(--warning-color)' }} />
+            <strong style={{ color: 'var(--warning-color)' }}>Khóa Chính (Primary Key):</strong> <code style={{ color: 'var(--text-main)' }}>{displaySchema.primary_key.join(', ')}</code>
           </div>
         )}
         {displaySchema.foreign_keys && displaySchema.foreign_keys.length > 0 && (
-          <div style={{ fontSize: '0.85rem', color: '#cbd5e1' }}>
-            <strong style={{ color: '#38bdf8' }}>Khóa Ngoại (Foreign Keys):</strong>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
+            <strong style={{ color: 'var(--primary-color)' }}>Khóa Ngoại (Foreign Keys):</strong>
             <ul style={{ marginTop: '6px', paddingLeft: '20px' }}>
               {displaySchema.foreign_keys.map((fk, idx) => (
                 <li key={idx} style={{ marginBottom: '4px' }}>
-                  <code style={{ color: '#38bdf8' }}>{fk.column_name}</code> → <code style={{ color: '#38bdf8' }}>{fk.ref_table}.{fk.ref_column}</code> 
+                  <code style={{ color: 'var(--primary-color)' }}>{fk.column_name}</code> → <code style={{ color: 'var(--primary-color)' }}>{fk.ref_table}.{fk.ref_column}</code> 
                   {fk.on_delete && ` (ON DELETE ${fk.on_delete})`}
                 </li>
               ))}

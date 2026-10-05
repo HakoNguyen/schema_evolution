@@ -1,0 +1,18 @@
+{
+  "name": "cdc-sink-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+    "tasks.max": "1",
+    "topics": "cdc_source_server.public.customers",
+    "connection.url": "jdbc:postgresql://postgres_db:5432/cdc_target",
+    "connection.username": "admin",
+    "connection.password": "password123",
+    "insert.mode": "upsert",
+    "primary.key.mode": "record_key",
+    "schema.evolution": "basic",
+    "transforms": "reroute",
+    "transforms.reroute.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.reroute.regex": ".*customers",
+    "transforms.reroute.replacement": "customers"
+  }
+}

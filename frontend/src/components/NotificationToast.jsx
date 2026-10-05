@@ -42,22 +42,22 @@ export function ToastProvider({ children }) {
           const isWarning = toast.type === 'warning';
 
           const bgColor = isSuccess 
-            ? '#064e3b' 
+            ? 'var(--success-bg)' 
             : isError 
-            ? '#7f1d1d' 
+            ? 'var(--danger-bg)' 
             : isWarning 
-            ? '#78350f' 
-            : '#1e293b';
+            ? 'var(--warning-bg)' 
+            : 'var(--card-bg)';
 
           const borderColor = isSuccess 
-            ? '#10b981' 
+            ? 'var(--success-color)' 
             : isError 
-            ? '#f43f5e' 
+            ? 'var(--danger-color)' 
             : isWarning 
-            ? '#f59e0b' 
-            : '#38bdf8';
+            ? 'var(--warning-color)' 
+            : 'var(--primary-color)';
 
-          const textColor = '#f8fafc';
+          const iconColor = borderColor;
 
           return (
             <div
@@ -70,16 +70,17 @@ export function ToastProvider({ children }) {
                 padding: '14px 16px',
                 borderRadius: '8px',
                 background: bgColor,
+                border: '1px solid var(--border-color)',
                 borderLeft: `4px solid ${borderColor}`,
-                boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
-                color: textColor,
+                boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
+                color: 'var(--text-main)',
                 fontSize: '0.875rem',
                 fontWeight: 500,
                 lineHeight: 1.4,
                 animation: 'fadeIn 0.2s ease-in-out'
               }}
             >
-              <div style={{ marginTop: '2px', flexShrink: 0, color: borderColor }}>
+              <div style={{ marginTop: '2px', flexShrink: 0, color: iconColor }}>
                 {isSuccess && <CheckCircle2 size={18} />}
                 {isError && <ShieldAlert size={18} />}
                 {isWarning && <AlertTriangle size={18} />}
@@ -91,7 +92,7 @@ export function ToastProvider({ children }) {
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#94a3b8',
+                  color: 'var(--text-muted)',
                   cursor: 'pointer',
                   padding: '2px',
                   display: 'flex',
