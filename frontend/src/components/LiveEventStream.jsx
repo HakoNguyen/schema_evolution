@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Zap, Activity, Clock, Layers, Filter } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
-export default function LiveEventStream() {
+export default function LiveEventStream({ onReviewTable }) {
   const { t } = useLanguage();
   const [events, setEvents] = useState([]);
   const [isLive, setIsLive] = useState(true);
@@ -105,8 +105,19 @@ export default function LiveEventStream() {
                     </div>
                   </div>
 
-                  <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Clock size={12} /> {evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : 'Just now'}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                    {isBreaking && onReviewTable && (
+                      <button
+                        className="btn-outline"
+                        style={{ padding: '5px 12px', fontSize: '0.78rem', fontWeight: 600, color: 'var(--danger-color)', borderColor: 'var(--danger-border)' }}
+                        onClick={() => onReviewTable(`${evt.pipeline}/${evt.table || evt.table_name}`)}
+                      >
+                        {t('review_approve')}
+                      </button>
+                    )}
+                    <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Clock size={12} /> {evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : 'Just now'}
+                    </div>
                   </div>
                 </div>
               );

@@ -120,7 +120,7 @@ export default function TablesList({ tables, onSelectTable }) {
               color: statusFilter === 'all' ? '#0b0f17' : 'var(--text-muted)'
             }}
           >
-            {t('all_pipelines')} ({totalTables})
+            {t('all_tables')} ({totalTables})
           </button>
           <button
             onClick={() => setStatusFilter('frozen')}

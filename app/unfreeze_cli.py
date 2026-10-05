@@ -117,13 +117,34 @@ def main():
         matching_pair = _find_pair_by_name(pairs, pair_name) if pair_name else None
         target_engine = matching_pair["target_engine"] if matching_pair else None
 
-        result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key)
+        if target_engine is not None:
+            # build_pairs() chỉ khởi tạo engine, chưa connect.
+            try:
+                target_engine.connect()
+            except Exception as e:
+                print(f"[X] Khong ket noi duoc Target DB ({e}). Huy approve, bang van frozen.")
+                sys.exit(1)
+
+        try:
+            if target_engine is not None:
+                from api.sandbox import run_sandbox_test
+                sandbox = run_sandbox_test(target_engine, registry_key, registry)
+                registry.mark_sandbox_result(registry_key, sandbox["status"] == "success", sandbox.get("message", ""))
+                print(f"[CLI] Sandbox: {sandbox['status']} - {sandbox.get('message')}")
+                if sandbox["status"] != "success":
+                    print("[X] Sandbox that bai. Huy approve, bang van frozen.")
+                    sys.exit(1)
+
+            result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key)
+        finally:
+            if target_engine is not None:
+                target_engine.disconnect()
         print(f"\n[CLI] Ket qua approve_change_and_sync('{registry_key}'): {result['status']}")
 
         if result.get("applied_to_target"):
             print(f"  [OK] Da tu dong chay DDL len Target DB: {[c.change_type.value for c in result['applied_to_target']]}")
         if result.get("failed_on_target"):
-            print(f"  [ERROR] Loi khi ap dung DDL len Target: {[c.change_type.value for c in result['failed_on_target']]}")
+            print(f"  [ERROR] Loi khi ap dung DDL len Target (bang van frozen): {result.get('errors')}")
 
         if result["status"] == "approved":
             notifier.notify_change_reviewed(table_name, approved=True, pair_name=pair_name)

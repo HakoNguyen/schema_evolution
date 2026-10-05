@@ -7,6 +7,7 @@ from src.schema_evolution.engines.base import (
     TableSchema, 
     SchemaChange, 
     ChangeType,
+    render_portable_default,
 )
 
 import clickhouse_connect
@@ -48,6 +49,8 @@ NORMALIZED_TO_CLICKHOUSE = {
     "json": "String",       
 }
 
+SANDBOX_SAMPLE_ROWS = 10000
+
 FIXED_STRING_RE = re.compile(r"^FixedString\((\d+)\)$")
 
 class ClickHouseEngine(BaseEngine): 
@@ -63,6 +66,7 @@ class ClickHouseEngine(BaseEngine):
             username=cfg.get("user", "default"),
             password=cfg.get("password", ""),
             database=cfg["database"],
+            connect_timeout=cfg.get("connect_timeout", 5),
         )
 
     def disconnect(self) -> None:
@@ -148,7 +152,9 @@ class ClickHouseEngine(BaseEngine):
 
     def _render_type(self, column: ColumnSchema) -> str:
         base_type = NORMALIZED_TO_CLICKHOUSE.get(column.data_type, "String")
-        if column.max_length and base_type == "String": 
+        if column.data_type == "numeric" and column.precision:
+            base_type = f"Decimal({min(column.precision, 76)},{column.scale or 0})"
+        if column.max_length and base_type == "String":
             base_type = f"FixedString({column.max_length})"
         if column.nullable: 
             return f"Nullable({base_type})"
@@ -160,7 +166,8 @@ class ClickHouseEngine(BaseEngine):
             if change.change_type == ChangeType.ADD_COLUMN:
                 col = change.new_value
                 type_sql = self._render_type(col)
-                default_sql = f" DEFAULT {col.default}" if col.default is not None else ""
+                default = render_portable_default(col.default, now_sql="now()")
+                default_sql = f" DEFAULT {default}" if default is not None else ""
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
                     f"ADD COLUMN {col.name} {type_sql}{default_sql}"
@@ -245,6 +252,10 @@ class ClickHouseEngine(BaseEngine):
                 self.connection.command(f"DROP TABLE IF EXISTS {sandbox_name}")
                 self.connection.command(f"CREATE TABLE {sandbox_name} AS {table_name}")
                 created_sandboxes.append(sandbox_name)
+                # Copy mẫu dữ liệu thật để bắt lỗi chuyển kiểu/NOT NULL.
+                self.connection.command(
+                    f"INSERT INTO {sandbox_name} SELECT * FROM {table_name} LIMIT {SANDBOX_SAMPLE_ROWS}"
+                )
             
             # 2. Apply DDL to sandbox tables
             statements = self.generate_ddl(changes)
@@ -255,8 +266,10 @@ class ClickHouseEngine(BaseEngine):
                     f"ALTER TABLE {sandbox_name} ",
                     1
                 )
-                self.execute_ddl(sandbox_stmt)
-                
+                # mutations_sync=1: MODIFY COLUMN là mutation bất đồng bộ —
+                # phải chờ chạy xong trên dữ liệu thì lỗi chuyển kiểu mới lộ ra.
+                self.connection.command(sandbox_stmt, settings={"mutations_sync": 1})
+
             return True, "Sandbox test passed (applied to clone table)."
         except Exception as e:
             return False, f"Sandbox test failed: {str(e)}"

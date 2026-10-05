@@ -30,3 +30,6 @@ src_code_review.md
 
 plan/
 bytebase/bytebase-data/
+
+# Registry lock files
+data/registry/**/*.lock

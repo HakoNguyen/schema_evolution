@@ -374,28 +374,32 @@ def main() -> None:
             approve_col, reject_col = st.columns(2)
             if approve_col.button("Approve", type="primary"):
                 target_engine = None
+                connected = True
                 try:
                     target_engine = build_target_engine(selected["pair_config"])
                 except Exception as e:
-                    st.warning(f"Không kết nối được target ({e}) — chỉ cập nhật Registry, không đồng bộ target.")
+                    connected = False
+                    st.error(f"Không kết nối được target ({e}) — huỷ approve, bảng vẫn frozen.")
 
-                result = approve_change_and_sync(target_engine, key, registry, registry_key=key)
+                if connected:
+                    try:
+                        result = approve_change_and_sync(target_engine, key, registry, registry_key=key)
+                    finally:
+                        if target_engine is not None:
+                            target_engine.disconnect()
 
-                if target_engine is not None:
-                    target_engine.disconnect()
-
-                if result.get("failed_on_target"):
-                    st.error(
-                        f"Có {len(result['failed_on_target'])} thay đổi KHÔNG áp dụng "
-                        f"được lên target — xem log console."
-                    )
-                if result.get("applied_to_target"):
-                    st.success(f"Đã đồng bộ {len(result['applied_to_target'])} thay đổi lên target.")
-
-                notifier.notify_change_reviewed(
-                    selected["table_name"], approved=True, pair_name=selected["pair_name"]
-                )
-                st.rerun()
+                    if result.get("applied_to_target"):
+                        st.success(f"Đã đồng bộ {len(result['applied_to_target'])} thay đổi lên target.")
+                    if result["status"] == "approved":
+                        notifier.notify_change_reviewed(
+                            selected["table_name"], approved=True, pair_name=selected["pair_name"]
+                        )
+                        st.rerun()
+                    else:
+                        st.error(
+                            "Approve thất bại, bảng vẫn frozen: "
+                            + "; ".join(result.get("errors", [result["status"]]))
+                        )
             if reject_col.button("Reject", type="secondary"):
                 registry.reject_change(key)
                 notifier.notify_change_reviewed(

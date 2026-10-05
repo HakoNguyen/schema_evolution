@@ -1,7 +1,39 @@
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
+
+_PG_CAST_RE = re.compile(r"::[\w\s\"\[\]]+(\(\d+(,\s*\d+)?\))?$")
+_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_NOW_DEFAULTS = {"current_timestamp", "now()", "current_timestamp()", "localtimestamp"}
+
+
+def render_portable_default(raw: Any, now_sql: str = "CURRENT_TIMESTAMP") -> Optional[str]:
+    """
+    Chuẩn hoá giá trị default crawl được từ DB nguồn thành literal SQL dùng
+    được ở DB đích khác loại. Trả về None nếu không nên mang default sang
+    (VD nextval() của sequence Postgres — chỉ có nghĩa ở DB nguồn).
+
+    - Postgres: "'pending'::character varying" -> "'pending'"
+    - MySQL trả chuỗi không có nháy: "abc" -> "'abc'"
+    - now()/CURRENT_TIMESTAMP -> now_sql
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s.upper() == "NULL" or s.lower().startswith("nextval("):
+        return None
+    s = _PG_CAST_RE.sub("", s).strip()
+    if s.startswith("(") and s.endswith(")") and s.count("(") == 1:
+        s = s[1:-1].strip()
+    if s.lower() in _NOW_DEFAULTS:
+        return now_sql
+    if s.lower() in ("true", "false") or _NUMBER_RE.match(s):
+        return s
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+        return s
+    return "'" + s.replace("'", "''") + "'"
 
 
 class ChangeSeverity(Enum):
@@ -41,6 +73,9 @@ class ColumnSchema:
     nullable: bool
     default: Optional[Any] = None
     max_length: Optional[int] = None
+    # Chỉ dùng cho numeric/decimal; None = không xác định (registry cũ).
+    precision: Optional[int] = None
+    scale: Optional[int] = None
 
 
 @dataclass

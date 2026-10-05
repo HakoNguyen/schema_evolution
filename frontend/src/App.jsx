@@ -134,7 +134,22 @@ function App() {
           {activePage === 'pipeline_topology' && <PipelineTopology />}
 
           {/* PAGE: Live CDC Stream */}
-          {activePage === 'live_events' && <LiveEventStream />}
+          {activePage === 'live_events' && (
+            <LiveEventStream
+              onReviewTable={(key) => {
+                const table = tables.find(tb => tb.registry_key === key);
+                if (!table) {
+                  addToast(t('table_not_found'), "error");
+                  return;
+                }
+                if (!table.is_frozen) {
+                  addToast(t('already_resolved'), "info");
+                }
+                setActivePage('monitored_tables');
+                setSelectedKey(key);
+              }}
+            />
+          )}
 
           {/* PAGE: Pipeline & System Config */}
           {activePage === 'pipeline_config' && <PipelineConfig />}

@@ -13,8 +13,9 @@ from src.schema_evolution.engines.postgres import PostgresEngine
 from src.schema_evolution.engines.mysql import MySQLEngine
 from src.schema_evolution.engines.mongo import MongoEngine
 from src.schema_evolution.engines.clickhouse import ClickHouseEngine
-from src.schema_evolution.core import SchemaRegistry, run_evolution_check
+from src.schema_evolution.core import SchemaRegistry, run_evolution_check, make_registry_key
 from src.schema_evolution.notification import TelegramNotifier
+from app import runtime_status
 
 ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
     "postgres": PostgresEngine,
@@ -22,6 +23,9 @@ ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
     "mongodb": MongoEngine,
     "clickhouse": ClickHouseEngine,
 }
+
+DEFAULT_FALLBACK_INTERVAL = 600
+
 
 def load_config(config_path: str) -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
@@ -56,6 +60,8 @@ def build_pairs(pairs_config: list[dict]) -> list[dict]:
             "source_engine": _build_engine(p["source"], name, "source"),
             "target_engine": _build_engine(target_spec, name, "target") if target_spec else None,
             "tables": p["tables"],
+            "detection": p.get("detection", {}),
+            "last_run": 0
         })
     return pairs
 
@@ -72,31 +78,83 @@ def run_cycle(
     pairs: list[dict],
     registry: SchemaRegistry, 
     notifier: TelegramNotifier,
+    default_interval: int = 60,
+    force_all: bool = False
 ) -> None: 
+    now = time.time()
     for item in pairs: 
         name = item["name"]
         source_engine = item["source_engine"]
         target_engine = item["target_engine"]
         tables = item["tables"]
+        detection = item.get("detection", {})
+        mode = detection.get("mode", "polling")
 
-        try: 
+        if mode == "event_driven":
+            pair_interval = detection.get("fallback_polling_interval_seconds", DEFAULT_FALLBACK_INTERVAL)
+        else:
+            pair_interval = default_interval
+
+        if not force_all and (now - item.get("last_run", 0) < pair_interval):
+            continue
+
+        item["last_run"] = now
+
+        try:
             ensure_connected(source_engine)
             if target_engine is not None:
                 ensure_connected(target_engine)
-        except Exception as e: 
+        except Exception as e:
             print(f"[scheduler] Khong ket noi duoc '{name}': {e}")
+            runtime_status.record_scan(name, ok=False, error=f"Mất kết nối: {e}")
             continue
 
-        for table_name in tables: 
-            try: 
-                registry_key = f"{name}__{table_name}"
+        mode_label = f"event_driven fallback ({pair_interval}s)" if mode == "event_driven" else f"polling ({pair_interval}s)"
+        print(f"[scheduler] Executing scan for '{name}' [{mode_label}]...")
+
+        errors = []
+        for table_name in tables:
+            try:
+                registry_key = make_registry_key(name, table_name)
                 result = run_evolution_check(
                     source_engine, target_engine, table_name, registry, notifier,
                     registry_key=registry_key,
                 )
                 print(f"[scheduler] {name}.{table_name}: {result['status']}")
+                log_detected_change(name, table_name, result, source="polling")
             except Exception as e:
+                errors.append(f"{table_name}: {e}")
                 print(f"[scheduler] Loi khi quet {name}.{table_name}: {e}")
+        runtime_status.record_scan(name, ok=not errors, error="; ".join(errors) or None)
+
+
+def log_detected_change(pipeline: str, table_name: str, result: dict, source: str) -> None:
+    """Ghi Live Event CHỈ khi có thay đổi thật — "frozen"/"no_change" lặp lại
+    mỗi chu kỳ không phải sự kiện mới."""
+    status = result.get("status")
+    if status not in ("changes_applied", "breaking_detected"):
+        return
+    from app.event_log import event_logger
+
+    def describe(changes):
+        return ", ".join(
+            f"{c.change_type.value} {c.column_name or c.constraint_name or ''}".strip() for c in changes
+        )
+
+    applied = result.get("non_breaking_applied") or []
+    pending = result.get("breaking_pending") or []
+    parts = []
+    if applied:
+        parts.append(f"Auto-synced: {describe(applied)}")
+    if pending:
+        parts.append(f"Pending approval: {describe(pending)}")
+    event_logger.add_event(
+        pipeline_name=pipeline,
+        table_name=table_name,
+        ddl=f"[{source}] " + " | ".join(parts),
+        status=status,
+        severity="breaking" if status == "breaking_detected" else "non_breaking",
+    )
         
 def main(config_path: str = "config/main.yaml") -> None:
     if __name__ == "__main__" and len(sys.argv) > 1:
@@ -109,13 +167,17 @@ def main(config_path: str = "config/main.yaml") -> None:
         chat_id=config["telegram"]["chat_id"],
     )
     pairs = build_pairs(config["pairs"])
-    interval = config["scheduler"]["interval_seconds"]
-    print(f"[scheduler] Starting loop, interval {interval}s. Ctrl+C to stop.")
+    default_interval = config["scheduler"]["interval_seconds"]
+    print(f"[scheduler] Starting loop, default interval {default_interval}s. Ctrl+C to stop.")
     
-    try: 
-        while True: 
-            run_cycle(pairs, registry, notifier)
-            time.sleep(interval)
+    try:
+        while True:
+            try:
+                run_cycle(pairs, registry, notifier, default_interval=default_interval)
+            except Exception as e:
+                # Không để 1 lỗi bất ngờ làm chết cả vòng lặp scheduler.
+                print(f"[scheduler] Loi khong mong doi trong chu ky: {e}")
+            time.sleep(5)
     except KeyboardInterrupt:
         print("\n[scheduler] Nhan Ctrl+C, dang dong ket noi...")
     finally:

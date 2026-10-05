@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import threading
 from src.schema_evolution.core import SchemaRegistry, approve_change_and_sync
 from src.schema_evolution.notification import TelegramNotifier
-from app.scheduler import main as scheduler_main
+from app.scheduler import main as scheduler_main, DEFAULT_FALLBACK_INTERVAL
+from app import runtime_status
 from src.schema_evolution.engines.postgres import PostgresEngine
 from src.schema_evolution.engines.mysql import MySQLEngine
 from src.schema_evolution.engines.mongo import MongoEngine
@@ -132,16 +133,36 @@ def get_pipeline_topology():
             
         detection = pair.get("detection", {})
         mode = detection.get("mode", "polling")
+        scan = runtime_status.get_pipeline(pair_name)
+        # Chưa quét lần nào -> "pending"; lần quét gần nhất lỗi -> "error".
+        scan_status = "pending" if not scan else ("active" if scan.get("last_scan_ok") else "error")
+        scan_info = {
+            "last_scan_at": scan.get("last_scan_at"),
+            "last_error": scan.get("last_error"),
+        }
 
         if mode == "event_driven":
-            kafka_cfg = detection.get("kafka", {})
+            # Cùng nguồn giá trị với kafka_consumer.start_consumer / scheduler.run_cycle.
+            kafka_cfg = {**config.get("kafka", {}), **detection.get("kafka", {})}
             topic = kafka_cfg.get("topic", pair_name)
+            bootstrap = kafka_cfg.get("bootstrap_servers", "localhost:19092")
+            consumer = runtime_status.get_consumer(bootstrap)
+            consumer_state = consumer.get("state", "disconnected")
+            fallback_interval = detection.get("fallback_polling_interval_seconds", DEFAULT_FALLBACK_INTERVAL)
             transport = {
                 "kind": "broker",
                 "type": "Redpanda (Kafka CDC)",
                 "topic": topic,
+                "bootstrap_servers": bootstrap,
                 "mode": "event_driven",
-                "status": "active"
+                "status": "active" if consumer_state == "connected" else consumer_state,
+                "error": consumer.get("error"),
+                "fallback": {
+                    "kind": "scheduler",
+                    "interval": fallback_interval,
+                    "status": scan_status,
+                    **scan_info,
+                }
             }
         else:
             interval = config.get("scheduler", {}).get("interval_seconds", 60)
@@ -150,7 +171,8 @@ def get_pipeline_topology():
                 "type": "Polling Scheduler",
                 "interval": interval,
                 "mode": "polling",
-                "status": "active"
+                "status": scan_status,
+                **scan_info,
             }
 
         pipelines.append({
@@ -292,23 +314,49 @@ def approve_changes(registry_key: str):
             
     if not pair_config:
         raise HTTPException(status_code=404, detail="Pair config not found")
-        
+
+    has_target = bool(pair_config.get("target"))
+    if has_target and not registry.sandbox_passed(registry_key):
+        return {"status": "error", "message": "Chưa chạy Sandbox test thành công cho bản nháp này."}
+
     target_engine = None
     try:
         target_engine = build_target_engine(pair_config)
     except Exception as e:
-        print(f"Không kết nối được target ({e})")
-        
-    result = approve_change_and_sync(target_engine, registry_key, registry, registry_key=registry_key)
-    
-    if target_engine is not None:
-        target_engine.disconnect()
-        
+        # Pair có target mà không kết nối được: không approve, giữ frozen,
+        # tránh để Registry lệch so với target thật.
+        return {"status": "error", "message": f"Không kết nối được target DB: {e}"}
+
+    try:
+        result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key)
+    finally:
+        if target_engine is not None:
+            target_engine.disconnect()
+
+    if result["status"] != "approved":
+        message = {
+            "failed": "Áp dụng DDL lên target thất bại: " + "; ".join(result.get("errors", [])),
+            "not_frozen": "Bảng không ở trạng thái chờ duyệt.",
+            "no_draft": "Không tìm thấy bản nháp.",
+        }.get(result["status"], result["status"])
+        return {"status": "error", "message": message, "result": _summarize_result(result)}
+
     notifier.notify_change_reviewed(
         table_name, approved=True, pair_name=pair_name
     )
-    
-    return {"status": "success", "result": result}
+
+    return {"status": "success", "result": _summarize_result(result)}
+
+
+def _summarize_result(result: dict) -> dict:
+    """SchemaChange không serialize JSON được — chỉ trả về tên change."""
+    def names(changes):
+        return [f"{c.change_type.value}:{c.column_name or c.constraint_name or ''}" for c in changes]
+    return {
+        "status": result["status"],
+        "applied_to_target": names(result.get("applied_to_target", [])),
+        "failed_on_target": names(result.get("failed_on_target", [])),
+    }
 
 @app.post("/api/tables/{registry_key:path}/reject")
 def reject_changes(registry_key: str):
@@ -319,7 +367,10 @@ def reject_changes(registry_key: str):
     clean_key = registry_key.replace("__", "/")
     pair_name, table_name = clean_key.split("/", 1) if "/" in clean_key else (clean_key, clean_key)
     
-    registry.reject_change(registry_key)
+    with registry.lock(registry_key):
+        rejected = registry.reject_change(registry_key)
+    if not rejected:
+        return {"status": "error", "message": "Không tìm thấy bản nháp để từ chối."}
     notifier.notify_change_reviewed(
         table_name, approved=False, pair_name=pair_name
     )
@@ -350,7 +401,12 @@ def test_sandbox(registry_key: str):
         return {"status": "error", "message": f"Cannot connect to target database: {str(e)}"}
         
     from api.sandbox import run_sandbox_test
-    result = run_sandbox_test(target_engine, registry_key, registry)
+    try:
+        result = run_sandbox_test(target_engine, registry_key, registry)
+    finally:
+        if target_engine is not None:
+            target_engine.disconnect()
+    registry.mark_sandbox_result(registry_key, result["status"] == "success", result.get("message", ""))
     return result
 
 @app.post("/api/tables/{registry_key:path}/edit")

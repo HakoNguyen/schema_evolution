@@ -30,6 +30,7 @@ export const translations = {
     pending_tables: 'PENDING / FROZEN',
     active_pipelines: 'ACTIVE CDC PIPELINES',
     sync_rate: 'SYNC SUCCESS RATE',
+    all_tables: 'All tables',
     search_tables_ph: 'Filter tables by name or pair...',
     pair: 'REGISTRY PAIR',
     table_name: 'TABLE NAME',
@@ -64,6 +65,9 @@ export const translations = {
     listening_desc: 'Connected to Redpanda Broker topic. DDL/Schema changes from Source DB will automatically appear here.',
     requires_approval: 'Requires Approval',
     auto_synced_badge: 'Auto Synced',
+    review_approve: 'Review & Approve',
+    table_not_found: 'This table is not in any configured pipeline.',
+    already_resolved: 'This change has already been resolved.',
 
     // Pipeline Topology
     topology_title: 'Pipeline Topology Visualizer',
@@ -79,6 +83,7 @@ export const translations = {
     node_engine: 'Gatekeeper Engine',
     node_target: 'Target Warehouse',
     monitored_tables_count: 'Monitored Tables',
+    polling_fallback: 'Polling fallback:',
 
     // Pipeline Config
     config_title: 'Web UI Configuration Management',
@@ -176,6 +181,7 @@ export const translations = {
     pending_tables: 'BẢNG CHỜ PHÊ DUYỆT',
     active_pipelines: 'PIPELINE CDC HOẠT ĐỘNG',
     sync_rate: 'TỶ LỆ ĐỒNG BỘ THÀNH CÔNG',
+    all_tables: 'Tất cả các bảng',
     search_tables_ph: 'Tìm kiếm bảng dữ liệu hoặc pipeline...',
     pair: 'CẶP ĐỒNG BỘ',
     table_name: 'TÊN BẢNG',
@@ -210,6 +216,9 @@ export const translations = {
     listening_desc: 'Hệ thống đang kết nối tới Redpanda Broker topic. Sự kiện thay đổi DDL/Schema từ Database Nguồn sẽ tự động xuất hiện tại đây.',
     requires_approval: 'Cần Phê Duyệt',
     auto_synced_badge: 'Tự Động Đồng Bộ',
+    review_approve: 'Xem & Phê Duyệt',
+    table_not_found: 'Bảng này không thuộc pipeline nào đang cấu hình.',
+    already_resolved: 'Thay đổi này đã được xử lý.',
 
     // Pipeline Topology
     topology_title: 'Sơ Đồ Luồng Pipeline Topology',
@@ -225,6 +234,7 @@ export const translations = {
     node_engine: 'Gatekeeper Engine',
     node_target: 'Warehouse Đích',
     monitored_tables_count: 'Bảng theo dõi',
+    polling_fallback: 'Quét dự phòng:',
 
     // Pipeline Config
     config_title: 'Quản Lý Cấu Hình Web UI',

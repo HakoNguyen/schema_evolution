@@ -5,6 +5,7 @@ from src.schema_evolution.engines.base import (
     TableSchema,
     SchemaChange,
     ChangeType,
+    render_portable_default,
 )
 
 import psycopg2
@@ -43,7 +44,9 @@ class PostgresEngine(BaseEngine):
         return "postgres"
 
     def connect(self) -> None:
-        self.connection = psycopg2.connect(**self.connection_config)
+        # Timeout ngắn: DB bị tắt không được treo scheduler (các pipeline
+        # khác quét tuần tự phía sau).
+        self.connection = psycopg2.connect(**{"connect_timeout": 5, **self.connection_config})
         self.connection.autocommit = False
 
     def disconnect(self) -> None:
@@ -72,16 +75,26 @@ class PostgresEngine(BaseEngine):
             return [row[0] for row in cur.fetchall()]
 
     def crawl_metadata(self, table_name: str) -> TableSchema:
-        return TableSchema(
-            table_name=table_name,
-            columns=self._crawl_columns(table_name),
-            primary_key=self._crawl_primary_keys(table_name),
-            foreign_keys=self._crawl_foreign_keys(table_name),
-        )
+        try:
+            return TableSchema(
+                table_name=table_name,
+                columns=self._crawl_columns(table_name),
+                primary_key=self._crawl_primary_keys(table_name),
+                foreign_keys=self._crawl_foreign_keys(table_name),
+            )
+        finally:
+            # autocommit=False: SELECT cũng mở transaction. Luôn đóng lại
+            # sau mỗi bảng — nếu 1 bảng lỗi, transaction bị "aborted" sẽ
+            # làm mọi bảng sau trong cùng chu kỳ lỗi theo.
+            try:
+                self.connection.rollback()
+            except Exception:
+                pass
 
     def _crawl_columns(self, table_name: str) -> list[ColumnSchema]:
         query = """
-        SELECT column_name, data_type, is_nullable, column_default, character_maximum_length
+        SELECT column_name, data_type, is_nullable, column_default, character_maximum_length,
+               numeric_precision, numeric_scale
         FROM information_schema.columns
         WHERE table_name = %s AND table_schema = 'public'
         ORDER BY ordinal_position
@@ -91,7 +104,8 @@ class PostgresEngine(BaseEngine):
             rows = cur.fetchall()
 
         columns = []
-        for name, data_type, is_nullable, default, max_length in rows:
+        for name, data_type, is_nullable, default, max_length, precision, scale in rows:
+            is_decimal = data_type == "numeric"
             columns.append(
                 ColumnSchema(
                     name=name,
@@ -99,6 +113,8 @@ class PostgresEngine(BaseEngine):
                     nullable=(is_nullable == "YES"),
                     default=default,
                     max_length=max_length,
+                    precision=precision if is_decimal else None,
+                    scale=scale if is_decimal else None,
                 )
             )
         return columns
@@ -167,6 +183,8 @@ class PostgresEngine(BaseEngine):
         pg_type = NORMALIZED_TO_POSTGRES.get(column.data_type, column.data_type)
         if column.max_length is not None and pg_type in ("varchar", "char"):
             return f"{pg_type}({column.max_length})"
+        if pg_type == "numeric" and column.precision:
+            return f"numeric({column.precision},{column.scale or 0})"
         return pg_type
 
     def generate_ddl(self, changes: list[SchemaChange]) -> list[str]:
@@ -176,7 +194,8 @@ class PostgresEngine(BaseEngine):
                 col = change.new_value
                 type_sql = self._render_type(col)
                 null_sql = "" if col.nullable else " NOT NULL"
-                default_sql = f" DEFAULT {col.default}" if col.default is not None else ""
+                default = render_portable_default(col.default)
+                default_sql = f" DEFAULT {default}" if default is not None else ""
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
                     f"ADD COLUMN {col.name} {type_sql}{null_sql}{default_sql}"

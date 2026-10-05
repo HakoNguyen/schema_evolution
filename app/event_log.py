@@ -15,10 +15,14 @@ class EventLog:
             event = {
                 "id": self._counter,
                 "timestamp": datetime.now().isoformat(),
+                "pipeline": pipeline_name,
                 "pipeline_name": pipeline_name,
+                "table": table_name,
                 "table_name": table_name,
+                "detail": ddl,
                 "ddl": ddl,
                 "status": status,
+                "type": severity,
                 "severity": severity,
             }
             self._events.appendleft(event)

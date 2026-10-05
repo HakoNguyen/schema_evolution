@@ -30,15 +30,9 @@ def run_sandbox_test(target_engine: BaseEngine | None, registry_key: str, regist
     if not all_changes:
         return {"status": "success", "message": "Sandbox test passed (no actual changes detected)."}
         
-    # Connect and test DDL
+    # target_engine đã được caller connect sẵn (build_target_engine).
     try:
-        target_engine.connect()
         success, message = target_engine.test_ddl(all_changes)
-        if success:
-            return {"status": "success", "message": message}
-        else:
-            return {"status": "error", "message": message}
     except Exception as e:
-        return {"status": "error", "message": f"Sandbox test failed: {str(e)}"}
-    finally:
-        target_engine.disconnect()
+        success, message = False, f"Sandbox test failed: {str(e)}"
+    return {"status": "success" if success else "error", "message": message}

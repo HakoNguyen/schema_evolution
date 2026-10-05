@@ -13,7 +13,7 @@ import pymongo
 from bson.objectid import ObjectId
 from bson.int64 import Int64
 
-SAMPLE_SIZE = 100
+SAMPLE_SIZE = 10000
 
 class MongoEngine(BaseEngine):
     @property
@@ -62,20 +62,16 @@ class MongoEngine(BaseEngine):
         Sample SAMPLE_SIZE document từ collection, suy luận kiểu dữ liệu
         + nullable cho từng field, cộng thêm cột _id làm primary key.
         """
-        docs = list(self.db[table_name].aggregate([{"$sample": {"size": SAMPLE_SIZE}}]))
+        # Không dùng $sample: mẫu ngẫu nhiên khiến field hiếm lúc có lúc
+        # không -> sinh DROP_COLUMN giả (breaking) và flip nullable. Quét
+        # tất định các document mới nhất (field mới luôn nằm ở đây).
+        docs = list(self.db[table_name].find({}).sort("_id", -1).limit(SAMPLE_SIZE))
 
         field_types: dict[str, set] = {}
-        field_seen_count: dict[str, int] = {}
-        field_has_null: dict[str, bool] = {}
-        total_docs = len(docs)
 
-        for doc in docs: 
-            for field_name, value in doc.items(): 
-                if field_name == "_id": 
-                    continue
-                field_seen_count[field_name] = field_seen_count.get(field_name, 0) + 1
-                if value is None: 
-                    field_has_null[field_name] = True
+        for doc in docs:
+            for field_name, value in doc.items():
+                if field_name == "_id" or value is None:
                     continue
                 field_types.setdefault(field_name, set()).add(self._infer_type(value))
 
@@ -83,11 +79,10 @@ class MongoEngine(BaseEngine):
         for field_name, types_seen in field_types.items():
             data_type = types_seen.pop() if len(types_seen) == 1 else "json"
 
-            nullable = (
-                field_has_null.get(field_name, False) 
-                or field_seen_count.get(field_name, 0) < total_docs
-            )
-            columns.append(ColumnSchema(name=field_name, data_type=data_type, nullable=nullable))
+            # Mongo schemaless: document cũ ngoài phạm vi quét có thể thiếu
+            # field, nên mọi field (trừ _id) luôn coi là nullable — tránh
+            # flip NOT NULL <-> NULL giữa các chu kỳ quét.
+            columns.append(ColumnSchema(name=field_name, data_type=data_type, nullable=True))
 
         return TableSchema(
             table_name=table_name, 

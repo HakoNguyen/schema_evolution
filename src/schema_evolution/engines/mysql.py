@@ -5,9 +5,12 @@ from src.schema_evolution.engines.base import (
     TableSchema,
     SchemaChange,
     ChangeType,
+    render_portable_default,
 )
 
 import mysql.connector
+
+SANDBOX_SAMPLE_ROWS = 10000
 
 TYPE_MAP = {
     "varchar": "varchar",
@@ -36,10 +39,13 @@ NORMALIZED_TO_MYSQL = {
     "float": "FLOAT",
     "double": "DOUBLE",
     "timestamp": "DATETIME",
+    "timestamptz": "DATETIME",
     "date": "DATE",
     "time": "TIME",
     "text": "TEXT",
     "json": "JSON",
+    "jsonb": "JSON",
+    "uuid": "CHAR(36)",
     "varchar": "VARCHAR",
     "char": "CHAR",
 }
@@ -51,7 +57,7 @@ class MySQLEngine(BaseEngine):
         return "mysql"
 
     def connect(self) -> None:
-        self.connection = mysql.connector.connect(**self.connection_config)
+        self.connection = mysql.connector.connect(**{"connection_timeout": 5, **self.connection_config})
         # QUAN TRỌNG: mysql-connector-python mặc định autocommit=False. Kết
         # hợp với isolation level mặc định của MySQL (REPEATABLE READ),
         # câu SELECT đầu tiên sẽ "khoá" lại 1 snapshot cố định — mọi lần
@@ -97,7 +103,8 @@ class MySQLEngine(BaseEngine):
 
     def _crawl_columns(self, table_name: str) -> list[ColumnSchema]:
         query = """
-        SELECT column_name, data_type, column_type, is_nullable, column_default, character_maximum_length
+        SELECT column_name, data_type, column_type, is_nullable, column_default, character_maximum_length,
+               numeric_precision, numeric_scale
         FROM information_schema.columns
         WHERE table_schema = DATABASE() AND table_name = %s
         ORDER BY ordinal_position
@@ -108,7 +115,8 @@ class MySQLEngine(BaseEngine):
         cur.close()
 
         columns = []
-        for name, data_type, column_type, is_nullable, default, max_length in rows:
+        for name, data_type, column_type, is_nullable, default, max_length, precision, scale in rows:
+            is_decimal = data_type == "decimal"
             columns.append(
                 ColumnSchema(
                     name=name,
@@ -116,6 +124,8 @@ class MySQLEngine(BaseEngine):
                     nullable=(is_nullable == "YES"),
                     default=default,
                     max_length=max_length,
+                    precision=int(precision) if is_decimal and precision is not None else None,
+                    scale=int(scale) if is_decimal and scale is not None else None,
                 )
             )
         return columns
@@ -181,12 +191,19 @@ class MySQLEngine(BaseEngine):
             return "TINYINT(1)"
         if column.max_length and mysql_type in ("VARCHAR", "CHAR"):
             return f"{mysql_type}({column.max_length})"
+        if mysql_type == "DECIMAL" and column.precision:
+            # MySQL giới hạn DECIMAL(65,30); Postgres numeric có thể lớn hơn.
+            return f"DECIMAL({min(column.precision, 65)},{min(column.scale or 0, 30)})"
+        if mysql_type == "VARCHAR":
+            # Postgres cho phép varchar không độ dài, MySQL thì không.
+            return "VARCHAR(255)"
         return mysql_type
 
     def _render_full_column_def(self, column: ColumnSchema) -> str:
         type_sql = self._render_type(column)
         null_sql = "NULL" if column.nullable else "NOT NULL"
-        default_sql = f" DEFAULT {column.default}" if column.default is not None else ""
+        default = render_portable_default(column.default)
+        default_sql = f" DEFAULT {default}" if default is not None else ""
         return f"{column.name} {type_sql} {null_sql}{default_sql}"
 
     def generate_ddl(self, changes: list[SchemaChange]) -> list[str]:
@@ -282,6 +299,11 @@ class MySQLEngine(BaseEngine):
                 cur.execute(f"DROP TABLE IF EXISTS {sandbox_name}")
                 cur.execute(f"CREATE TABLE {sandbox_name} LIKE {table_name}")
                 created_sandboxes.append(sandbox_name)
+                # Copy mẫu dữ liệu thật: bảng rỗng không bắt được lỗi do
+                # dữ liệu (NOT NULL khi đang có NULL, thu hẹp kiểu...).
+                cur.execute(
+                    f"INSERT INTO {sandbox_name} SELECT * FROM {table_name} LIMIT {SANDBOX_SAMPLE_ROWS}"
+                )
             
             # 2. Apply DDL to sandbox tables
             statements = self.generate_ddl(changes)

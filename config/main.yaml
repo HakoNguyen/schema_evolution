@@ -13,5 +13,5 @@ kafka:
   # sasl_plain_password: "password"
 
 telegram: 
-  bot_token: "8879429819:AAHtWcIRLKYU-eoM5MzX1iKoWCDexPIDDpo"
+  bot_token: ""  # đặt qua biến môi trường TELEGRAM_BOT_TOKEN
   chat_id: "8074160008"

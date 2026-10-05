@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 
 from src.schema_evolution.engines.base import SchemaChange, ChangeType
@@ -94,6 +95,9 @@ def _build_header(icon: str, title: str, table_name: str, pair_name: str | None,
 
 class TelegramNotifier:
     def __init__(self, bot_token: str, chat_id: str, max_retries: int = 2):
+        # Biến môi trường ưu tiên hơn config — không commit token vào YAML.
+        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or bot_token
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID") or chat_id
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.max_retries = max_retries

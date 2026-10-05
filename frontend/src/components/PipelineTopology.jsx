@@ -3,6 +3,28 @@ import { Database, Cpu, ShieldCheck, HardDrive, ArrowRight, RefreshCw, AlertTria
 import { useToast } from './NotificationToast';
 import { useLanguage } from '../context/LanguageContext';
 
+const STATUS_STYLE = {
+  active: { color: 'var(--success-color)', label: { en: 'Running', vi: 'Đang chạy' } },
+  connecting: { color: 'var(--text-muted)', label: { en: 'Connecting…', vi: 'Đang kết nối…' } },
+  pending: { color: 'var(--text-muted)', label: { en: 'Not scanned yet', vi: 'Chưa quét' } },
+  disconnected: { color: 'var(--danger-color)', label: { en: 'Disconnected', vi: 'Mất kết nối' } },
+  error: { color: 'var(--danger-color)', label: { en: 'Last scan failed', vi: 'Lần quét gần nhất lỗi' } },
+};
+
+// Trạng thái chạy thật lấy từ /api/topology (scheduler / Kafka consumer).
+function RuntimeStatus({ status, error, lastScanAt }) {
+  const { lang } = useLanguage();
+  const s = STATUS_STYLE[status] || STATUS_STYLE.pending;
+  return (
+    <div title={error || ''} style={{ fontSize: '0.7rem', color: s.color, marginTop: '4px', fontWeight: 600 }}>
+      ● {s.label[lang] || s.label.en}
+      {lastScanAt && (
+        <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}> · {new Date(lastScanAt).toLocaleTimeString()}</span>
+      )}
+    </div>
+  );
+}
+
 export default function PipelineTopology() {
   const [pipelines, setPipelines] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -244,13 +266,27 @@ export default function PipelineTopology() {
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_broker')}</div>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Redpanda Kafka</div>
                             <div style={{ fontSize: '0.75rem', color: 'var(--success-color)', marginTop: '2px' }}>{pipeline.transport?.topic || pipeline.broker?.topic || pipeline.name}</div>
+                            <RuntimeStatus status={pipeline.transport?.status} error={pipeline.transport?.error} />
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                              ({t('polling_fallback')} {pipeline.transport?.fallback?.interval}s)
+                            </div>
+                            <RuntimeStatus
+                              status={pipeline.transport?.fallback?.status}
+                              error={pipeline.transport?.fallback?.last_error}
+                              lastScanAt={pipeline.transport?.fallback?.last_scan_at}
+                            />
                           </div>
                         ) : (
                           <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
                             <Clock size={22} color="var(--primary-color)" style={{ marginBottom: '6px' }} />
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_scheduler')}</div>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Polling Scanner</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '2px' }}>Interval: {pipeline.transport?.interval || 60}s</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '2px' }}>Interval: {pipeline.transport?.interval}s</div>
+                            <RuntimeStatus
+                              status={pipeline.transport?.status}
+                              error={pipeline.transport?.last_error}
+                              lastScanAt={pipeline.transport?.last_scan_at}
+                            />
                           </div>
                         )}
 

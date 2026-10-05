@@ -1,4 +1,8 @@
 import json
+import os
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
@@ -32,11 +36,58 @@ CHANGE_SEVERITY_MAP: dict[ChangeType, ChangeSeverity] = {
     ChangeType.CHANGE_FOREIGN_KEY_ACTION: ChangeSeverity.BREAKING,
 }
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOCK_TIMEOUT_SECONDS = 120
+_thread_locks: dict[str, threading.Lock] = {}
+_thread_locks_guard = threading.Lock()
+
+
+def make_registry_key(pipeline_name: str, table_name: str) -> str:
+    """Định dạng key DUY NHẤT dùng chung cho scheduler, Kafka consumer, API."""
+    return f"{pipeline_name}/{table_name}"
+
+
 class SchemaRegistry:
     def __init__(self, registry_dir: str):
-        self.registry_dir = Path(registry_dir)
+        # Đường dẫn tương đối tính theo gốc project, không theo cwd — nếu
+        # không, chạy từ app/ và từ gốc sẽ ghi vào 2 registry khác nhau.
+        p = Path(registry_dir)
+        self.registry_dir = p if p.is_absolute() else (PROJECT_ROOT / p).resolve()
         self.registry_dir.mkdir(parents=True, exist_ok=True)
         self._migrate_flat_files()
+
+    @contextmanager
+    def lock(self, key: str):
+        """
+        Khoá theo bảng, an toàn cả giữa thread (Kafka + scheduler trong cùng
+        tiến trình API) lẫn giữa tiến trình (file lock). Người vào sau sẽ
+        đọc lại registry đã cập nhật -> không áp DDL / gửi cảnh báo 2 lần.
+        """
+        with _thread_locks_guard:
+            tlock = _thread_locks.setdefault(key, threading.Lock())
+        with tlock:
+            lock_path = self._path(key).with_suffix(".lock")
+            deadline = time.time() + LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.close(fd)
+                    break
+                except FileExistsError:
+                    try:
+                        stale = time.time() - lock_path.stat().st_mtime > LOCK_TIMEOUT_SECONDS
+                    except FileNotFoundError:
+                        continue
+                    if stale:
+                        lock_path.unlink(missing_ok=True)
+                        continue
+                    if time.time() > deadline:
+                        raise TimeoutError(f"Registry key '{key}' đang bị khoá bởi tiến trình khác")
+                    time.sleep(0.2)
+            try:
+                yield
+            finally:
+                lock_path.unlink(missing_ok=True)
 
     def _migrate_flat_files(self) -> None:
         """Migrate legacy flat pair__table.json files to pipeline/table.json subfolders."""
@@ -203,6 +254,24 @@ class SchemaRegistry:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def mark_sandbox_result(self, table_name: str, passed: bool, message: str) -> None:
+        """Ghi kết quả sandbox vào draft — save_draft() tạo draft mới nên
+        mỗi lần phát hiện lại đều phải test lại từ đầu."""
+        draft = self.load_draft(table_name)
+        if draft is None:
+            return
+        draft["sandbox"] = {
+            "passed": passed,
+            "message": message,
+            "tested_at": datetime.now().isoformat(),
+        }
+        with open(self._draft_path(table_name), "w", encoding="utf-8") as f:
+            json.dump(draft, f, ensure_ascii=False, indent=2)
+
+    def sandbox_passed(self, table_name: str) -> bool:
+        draft = self.load_draft(table_name)
+        return bool(draft and draft.get("sandbox", {}).get("passed"))
+
     def approve_change(self, table_name: str) -> bool:
         draft = self.load_draft(table_name)
         if draft is None:
@@ -306,37 +375,43 @@ def _detect_rename_candidates(
     matched_old: set[str] = set()
     matched_new: set[str] = set()
 
-    for old_name, old_col in missing_in_new.items():
-        if old_name in matched_old:
+    def same_definition(a: ColumnSchema, b: ColumnSchema) -> bool:
+        # Chỉ coi là rename khi định nghĩa cột trùng KHỚP HOÀN TOÀN (kiểu,
+        # độ dài, precision, nullable, default) — cùng họ kiểu là chưa đủ.
+        return (
+            a.data_type == b.data_type
+            and a.max_length == b.max_length
+            and a.precision == b.precision
+            and a.scale == b.scale
+            and a.nullable == b.nullable
+            and a.default == b.default
+        )
+
+    candidates = {
+        old_name: [n for n, new_col in added_in_new.items() if same_definition(old_col, new_col)]
+        for old_name, old_col in missing_in_new.items()
+    }
+
+    for old_name, new_names in candidates.items():
+        # Ghép cặp 1-1 duy nhất: cột cũ khớp đúng 1 cột mới VÀ cột mới đó
+        # chỉ khớp đúng 1 cột cũ. Mơ hồ -> để nguyên DROP + ADD.
+        if len(new_names) != 1:
             continue
-        for new_name, new_col in added_in_new.items():
-            if new_name in matched_new:
-                continue
-
-            # Điều kiện 1: Trùng data_type (hoặc cùng họ kiểu dữ liệu)
-            old_fam = TYPE_TO_FAMILY.get(old_col.data_type)
-            new_fam = TYPE_TO_FAMILY.get(new_col.data_type)
-            type_match = (
-                old_col.data_type == new_col.data_type
-                or (old_fam is not None and old_fam == new_fam)
+        new_name = new_names[0]
+        if sum(new_name in names for names in candidates.values()) != 1:
+            continue
+        rename_changes.append(
+            SchemaChange(
+                table_name=table_name,
+                change_type=ChangeType.RENAME_COLUMN,
+                severity=CHANGE_SEVERITY_MAP[ChangeType.RENAME_COLUMN],
+                column_name=old_name,
+                old_value=missing_in_new[old_name],
+                new_value=added_in_new[new_name],
             )
-            # Điều kiện 2: Trùng nullability
-            nullable_match = (old_col.nullable == new_col.nullable)
-
-            if type_match and nullable_match:
-                rename_changes.append(
-                    SchemaChange(
-                        table_name=table_name,
-                        change_type=ChangeType.RENAME_COLUMN,
-                        severity=CHANGE_SEVERITY_MAP[ChangeType.RENAME_COLUMN],
-                        column_name=old_name,
-                        old_value=old_col,
-                        new_value=new_col,
-                    )
-                )
-                matched_old.add(old_name)
-                matched_new.add(new_name)
-                break
+        )
+        matched_old.add(old_name)
+        matched_new.add(new_name)
 
     return rename_changes, matched_old, matched_new
 
@@ -536,11 +611,13 @@ def _merge_schema(base: TableSchema, applied_changes: list[SchemaChange]) -> Tab
 
 def _extract_pair_name(registry_key: str) -> str | None:
     """
-    registry_key thường có dạng "{pair_name}__{table_name}" (do
-    scheduler.py build) — tách lấy pair_name để hiện ngữ cảnh rõ hơn
-    trong Telegram (biết đang nói về pair/DB nào, không chỉ tên bảng).
-    Trả về None nếu registry_key không theo đúng format này.
+    registry_key có dạng "{pair_name}/{table_name}" (scheduler.py,
+    kafka_consumer.py) hoặc dạng cũ "{pair_name}__{table_name}" — tách lấy
+    pair_name để hiện ngữ cảnh rõ hơn trong Telegram (biết đang nói về
+    pair/DB nào, không chỉ tên bảng). Trả về None nếu không theo format.
     """
+    if registry_key and "/" in registry_key:
+        return registry_key.split("/", 1)[0]
     if registry_key and "__" in registry_key:
         return registry_key.rsplit("__", 1)[0]
     return None
@@ -553,6 +630,24 @@ def run_evolution_check(
     registry: SchemaRegistry,
     notifier=None,
     registry_key: str | None = None,
+) -> dict:
+    # Kafka và polling có thể cùng xử lý 1 thay đổi: khoá theo bảng, người
+    # vào sau đọc lại registry đã cập nhật -> "no_change", không trùng DDL
+    # hay cảnh báo.
+    key = registry_key if registry_key is not None else table_name
+    with registry.lock(key):
+        return _run_evolution_check_unlocked(
+            source_engine, target_engine, table_name, registry, notifier, key
+        )
+
+
+def _run_evolution_check_unlocked(
+    source_engine: BaseEngine,
+    target_engine: BaseEngine,
+    table_name: str,
+    registry: SchemaRegistry,
+    notifier,
+    registry_key: str,
 ) -> dict:
     """
     source_engine: DB bị theo dõi thay đổi — chỉ dùng để crawl_metadata,
@@ -641,6 +736,17 @@ def approve_change_and_sync(
     registry: SchemaRegistry,
     registry_key: str | None = None,
 ) -> dict:
+    key = registry_key if registry_key is not None else table_name
+    with registry.lock(key):
+        return _approve_change_and_sync_unlocked(target_engine, table_name, registry, key)
+
+
+def _approve_change_and_sync_unlocked(
+    target_engine: BaseEngine | None,
+    table_name: str,
+    registry: SchemaRegistry,
+    registry_key: str,
+) -> dict:
     """
     Approve 1 bảng đang bị frozen, ĐỒNG THỜI tự động chạy DDL tương ứng
     lên target — khép kín vòng lặp Approve, khác với
@@ -679,18 +785,36 @@ def approve_change_and_sync(
 
     applied = []
     failed = []
+    errors = []
     if target_engine is not None and all_changes:
-        ddls = target_engine.generate_ddl(all_changes)
-        for change, ddl in zip(all_changes, ddls):
+        for change in all_changes:
+            # Sinh DDL từng change một: 1 change không hỗ trợ (ValueError)
+            # không được làm hỏng cả lượt approve.
             try:
-                target_engine.execute_ddl(ddl)
+                for ddl in target_engine.generate_ddl([change]):
+                    target_engine.execute_ddl(ddl)
                 applied.append(change)
             except Exception as e:
                 failed.append(change)
+                errors.append(f"{change.change_type.value} {change.column_name or change.constraint_name or ''}: {e}")
                 print(
                     f"[approve_change_and_sync] Lỗi khi áp dụng "
                     f"{change.change_type} lên target ({table_name}): {e}"
                 )
+
+    if failed:
+        # Target chưa khớp draft -> KHÔNG approve. Giữ frozen + draft; chỉ
+        # ghi nhận vào baseline những change đã chạy thành công, để lần
+        # approve lại sau chỉ còn các change bị lỗi.
+        if applied:
+            registry.save(key, _apply_changes_to_baseline(old_schema, new_schema, applied))
+        return {
+            "status": "failed",
+            "table": table_name,
+            "applied_to_target": applied,
+            "failed_on_target": failed,
+            "errors": errors,
+        }
 
     registry.approve_change(key)
 
@@ -700,3 +824,58 @@ def approve_change_and_sync(
         "applied_to_target": applied,
         "failed_on_target": failed,
     }
+
+
+_COLUMN_LEVEL_CHANGES = {
+    ChangeType.WIDEN_TYPE,
+    ChangeType.NARROW_TYPE,
+    ChangeType.CHANGE_TYPE_INCOMPATIBLE,
+    ChangeType.NOT_NULL_TO_NULLABLE,
+    ChangeType.NULLABLE_TO_NOT_NULL,
+}
+_PK_CHANGES = {ChangeType.ADD_PRIMARY_KEY, ChangeType.DROP_PRIMARY_KEY, ChangeType.CHANGE_PRIMARY_KEY}
+_FK_CHANGES = {
+    ChangeType.ADD_FOREIGN_KEY,
+    ChangeType.DROP_FOREIGN_KEY,
+    ChangeType.CHANGE_FOREIGN_KEY_TARGET,
+    ChangeType.CHANGE_FOREIGN_KEY_ACTION,
+}
+
+
+def _apply_changes_to_baseline(
+    old: TableSchema, new: TableSchema, applied: list[SchemaChange]
+) -> TableSchema:
+    """
+    Đưa baseline `old` tiến tới `new` CHỈ theo các change trong `applied`
+    (mọi loại change, kể cả breaking) — dùng khi approve thành công một
+    phần, để registry phản ánh đúng trạng thái thật của target.
+    """
+    merged = copy.deepcopy(old)
+    new_cols = {c.name: c for c in new.columns}
+    new_fks = {fk.constraint_name: fk for fk in new.foreign_keys}
+
+    for change in applied:
+        t = change.change_type
+        if t == ChangeType.ADD_COLUMN:
+            merged.columns.append(copy.deepcopy(new_cols.get(change.column_name, change.new_value)))
+        elif t == ChangeType.DROP_COLUMN:
+            merged.columns = [c for c in merged.columns if c.name != change.column_name]
+        elif t == ChangeType.RENAME_COLUMN:
+            merged.columns = [
+                copy.deepcopy(change.new_value) if c.name == change.column_name else c
+                for c in merged.columns
+            ]
+        elif t in _COLUMN_LEVEL_CHANGES and change.column_name in new_cols:
+            merged.columns = [
+                copy.deepcopy(new_cols[c.name]) if c.name == change.column_name else c
+                for c in merged.columns
+            ]
+        elif t in _PK_CHANGES:
+            merged.primary_key = list(new.primary_key)
+        elif t in _FK_CHANGES:
+            merged.foreign_keys = [
+                fk for fk in merged.foreign_keys if fk.constraint_name != change.constraint_name
+            ]
+            if change.constraint_name in new_fks:
+                merged.foreign_keys.append(copy.deepcopy(new_fks[change.constraint_name]))
+    return merged
