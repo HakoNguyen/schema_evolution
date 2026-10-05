@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Check, X, ShieldAlert, TestTube } from 'lucide-react';
 import { useToast } from './NotificationToast';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function PendingApproval({ registryKey, onResolved }) {
+  const { t } = useLanguage();
   const [draft, setDraft] = useState(null);
   const [loading, setLoading] = useState(false);
   const [isSandboxTested, setIsSandboxTested] = useState(false);
@@ -85,10 +87,10 @@ export default function PendingApproval({ registryKey, onResolved }) {
         <ShieldAlert color="var(--danger-color)" size={24} />
         <div>
           <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--danger-color)' }}>
-            Phát Hiện Thay Đổi Có Rủi Ro Gãy Cấu Trúc (Breaking Changes Pending Approval)
+            {t('breaking_alert_title')}
           </h3>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Thời gian phát hiện: {draft.detected_at ? new Date(draft.detected_at).toLocaleString() : 'N/A'}
+            {t('detected_at')} {draft.detected_at ? new Date(draft.detected_at).toLocaleString() : 'N/A'}
           </div>
         </div>
       </div>
@@ -100,7 +102,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
               {change.change_type}
             </span>
             <span>
-              tại cột/ràng buộc <code style={{ color: 'var(--primary-color)' }}>{change.column_name || change.constraint_name || '?'}</code>
+              target column/constraint: <code style={{ color: 'var(--primary-color)' }}>{change.column_name || change.constraint_name || '?'}</code>
             </span>
           </div>
         ))}
@@ -125,7 +127,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
           }}
         >
           {isSandboxTested ? <Check size={16} /> : <TestTube size={16} />} 
-          {loading ? 'Đang Kiểm Thử Sandbox...' : (isSandboxTested ? 'Đã Kiểm Thử Sandbox An Toàn' : 'Chạy Thử Trên Sandbox cách ly')}
+          {loading ? t('testing_sandbox') : (isSandboxTested ? t('sandbox_tested') : t('test_sandbox'))}
         </button>
 
         <button 
@@ -146,7 +148,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
             fontSize: '0.85rem'
           }}
         >
-          <Check size={16} /> {loading ? 'Đang Xử Lý...' : 'Phê Duyệt & Thực Thi DDL'}
+          <Check size={16} /> {loading ? t('processing') : t('approve_ddl')}
         </button>
 
         <button 
@@ -166,7 +168,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
             fontSize: '0.85rem'
           }}
         >
-          <X size={16} /> {loading ? 'Đang Xử Lý...' : 'Từ Chối'}
+          <X size={16} /> {loading ? t('processing') : t('reject')}
         </button>
       </div>
     </div>

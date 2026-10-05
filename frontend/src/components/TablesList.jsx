@@ -76,7 +76,7 @@ export default function TablesList({ tables, onSelectTable }) {
       {/* 2. SEARCH & STATUS FILTER TOOLBAR */}
       <div style={{
         display: 'flex',
-        justify: 'space-between',
+        justifyContent: 'space-between',
         alignItems: 'center',
         background: 'var(--card-bg)',
         border: '1px solid var(--border-color)',
@@ -190,7 +190,7 @@ export default function TablesList({ tables, onSelectTable }) {
                 background: 'var(--card-bg)',
                 borderBottom: isCollapsed ? 'none' : '1px solid var(--border-color)',
                 display: 'flex',
-                justify: 'space-between',
+                justifyContent: 'space-between',
                 alignItems: 'center',
                 cursor: 'pointer',
                 userSelect: 'none'

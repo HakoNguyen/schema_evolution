@@ -130,17 +130,37 @@ def get_pipeline_topology():
                 "version": version
             })
             
+        detection = pair.get("detection", {})
+        mode = detection.get("mode", "polling")
+
+        if mode == "event_driven":
+            kafka_cfg = detection.get("kafka", {})
+            topic = kafka_cfg.get("topic", pair_name)
+            transport = {
+                "kind": "broker",
+                "type": "Redpanda (Kafka CDC)",
+                "topic": topic,
+                "mode": "event_driven",
+                "status": "active"
+            }
+        else:
+            interval = config.get("scheduler", {}).get("interval_seconds", 60)
+            transport = {
+                "kind": "scheduler",
+                "type": "Polling Scheduler",
+                "interval": interval,
+                "mode": "polling",
+                "status": "active"
+            }
+
         pipelines.append({
             "name": pair_name,
             "source": {
                 "type": source_type,
                 "host": pair.get("source", {}).get("config", {}).get("host", "localhost")
             },
-            "broker": {
-                "type": "Redpanda (Kafka CDC)",
-                "status": "active",
-                "topic": pair_name
-            },
+            "transport": transport,
+            "broker": transport, # Backward compatibility alias
             "gatekeeper": {
                 "status": "healthy" if not any(t["is_frozen"] for t in tables) else "attention_required"
             },

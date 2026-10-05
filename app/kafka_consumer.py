@@ -17,7 +17,20 @@ except ModuleNotFoundError:
 
 
 def run_consumer_for_cluster(cluster_kafka_config: dict, cluster_pairs: list[dict], registry: SchemaRegistry, notifier: TelegramNotifier) -> None:
-    topics = [p["name"] for p in cluster_pairs]
+    event_driven_pairs = [
+        p for p in cluster_pairs
+        if (p.get("raw_config", {}).get("detection", {}).get("mode") == "event_driven" or p.get("detection", {}).get("mode") == "event_driven")
+    ]
+    if not event_driven_pairs:
+        print(f"[Kafka Consumer] Không có pipeline nào bật chế độ event-driven trong cluster {cluster_kafka_config.get('bootstrap_servers', 'localhost:19092')}. Bỏ qua.")
+        return
+
+    topics = []
+    for p in event_driven_pairs:
+        detection = p.get("raw_config", {}).get("detection") or p.get("detection") or {}
+        t_name = detection.get("kafka", {}).get("topic", p["name"])
+        topics.append(t_name)
+
     kafka_bootstrap = cluster_kafka_config.get("bootstrap_servers", "localhost:19092")
     group_id = cluster_kafka_config.get("group_id", "schema-evolution-group")
 
@@ -82,10 +95,12 @@ def run_consumer_for_cluster(cluster_kafka_config: dict, cluster_pairs: list[dic
                 else:
                     table_name = payload.get("table") or payload.get("table_name")
 
-                # Find matching pair within this cluster's pairs
+                # Find matching pair within event-driven pairs
                 matching_pair = None
-                for p in cluster_pairs:
-                    if p["name"] == message.topic:
+                for p in event_driven_pairs:
+                    detection = p.get("raw_config", {}).get("detection") or p.get("detection") or {}
+                    t_name = detection.get("kafka", {}).get("topic", p["name"])
+                    if t_name == message.topic or p["name"] == message.topic:
                         matching_pair = p
                         break
 

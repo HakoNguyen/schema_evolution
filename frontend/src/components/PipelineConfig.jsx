@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Sliders, Server, Plus, Edit2, Trash2, X, Save, RefreshCw, Layers, Search } from 'lucide-react';
 import { useToast } from './NotificationToast';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function PipelineConfig() {
+  const { t } = useLanguage();
   const [pipelines, setPipelines] = useState([]);
   const [systemConfig, setSystemConfig] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -16,6 +18,8 @@ export default function PipelineConfig() {
   // Form State for Pipeline Create/Edit
   const [formData, setFormData] = useState({
     name: '',
+    detectionMode: 'polling',
+    kafkaTopic: '',
     sourceType: 'postgres',
     sourceHost: 'localhost',
     sourcePort: 5432,
@@ -55,6 +59,8 @@ export default function PipelineConfig() {
       setEditingPipeline(pipeline);
       setFormData({
         name: pipeline.name || '',
+        detectionMode: pipeline.detection?.mode || 'polling',
+        kafkaTopic: pipeline.detection?.kafka?.topic || pipeline.name || '',
         sourceType: pipeline.source?.type || 'postgres',
         sourceHost: pipeline.source?.config?.host || 'localhost',
         sourcePort: pipeline.source?.config?.port || 5432,
@@ -69,6 +75,8 @@ export default function PipelineConfig() {
       setEditingPipeline(null);
       setFormData({
         name: '',
+        detectionMode: 'polling',
+        kafkaTopic: '',
         sourceType: 'postgres',
         sourceHost: 'localhost',
         sourcePort: 5432,
@@ -89,6 +97,9 @@ export default function PipelineConfig() {
     
     const payload = {
       name: formData.name,
+      detection: {
+        mode: formData.detectionMode
+      },
       source: {
         type: formData.sourceType,
         config: {
@@ -99,6 +110,12 @@ export default function PipelineConfig() {
       },
       tables: tableList
     };
+
+    if (formData.detectionMode === 'event_driven') {
+      payload.detection.kafka = {
+        topic: formData.kafkaTopic.trim() || formData.name
+      };
+    }
 
     if (formData.targetType && formData.targetType !== 'none') {
       payload.target = {
@@ -184,10 +201,10 @@ export default function PipelineConfig() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Sliders style={{ color: 'var(--primary-color)' }} /> Quản lý cấu hình Web UI
+            <Sliders style={{ color: 'var(--primary-color)' }} /> {t('config_title')}
           </h2>
           <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            Đọc và ghi trực tiếp các file cấu hình YAML trong thư mục <code style={{ color: 'var(--primary-color)' }}>config/main.yaml</code> và <code style={{ color: 'var(--primary-color)' }}>config/pipelines/*.yaml</code>.
+            {t('config_sub')}
           </p>
         </div>
 
@@ -205,7 +222,7 @@ export default function PipelineConfig() {
               fontSize: '0.85rem'
             }}
           >
-            Luồng pipelines ({pipelines.length})
+            {t('pipelines_tab')} ({pipelines.length})
           </button>
           <button
             onClick={() => setActiveSubTab('system')}
@@ -220,24 +237,24 @@ export default function PipelineConfig() {
               fontSize: '0.85rem'
             }}
           >
-            Hệ thống (main.yaml)
+            {t('system_tab')}
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="no-data">Đang tải cấu hình...</div>
+        <div className="no-data">{t('loading_config')}</div>
       ) : activeSubTab === 'system' ? (
         /* TAB 1: SYSTEM CONFIG (main.yaml) */
         <div style={{ background: 'var(--card-bg)', padding: '24px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: 0, marginBottom: '20px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Server size={18} style={{ color: 'var(--primary-color)' }} /> Cấu hình hệ thống gốc (config/main.yaml)
+            <Server size={18} style={{ color: 'var(--primary-color)' }} /> {t('system_config_title')}
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: 'var(--text-dim)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                Registry Directory
+                {t('registry_dir')}
               </label>
               <input
                 type="text"
@@ -252,7 +269,7 @@ export default function PipelineConfig() {
 
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: 'var(--text-dim)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                Quét Baseline Định Kỳ (seconds)
+                {t('scan_interval')}
               </label>
               <input
                 type="number"
@@ -267,7 +284,7 @@ export default function PipelineConfig() {
 
             <div style={{ gridColumn: 'span 2' }}>
               <label style={{ display: 'block', marginBottom: '6px', color: 'var(--text-dim)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                Kafka Bootstrap Servers (CDC Event Bus)
+                {t('kafka_bootstrap')}
               </label>
               <input
                 type="text"
@@ -282,7 +299,7 @@ export default function PipelineConfig() {
 
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: 'var(--text-dim)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                Telegram Bot Token
+                {t('telegram_bot_token')}
               </label>
               <input
                 type="text"
@@ -297,7 +314,7 @@ export default function PipelineConfig() {
 
             <div>
               <label style={{ display: 'block', marginBottom: '6px', color: 'var(--text-dim)', fontWeight: 600, fontSize: '0.75rem', textTransform: 'uppercase' }}>
-                Telegram Chat ID
+                {t('telegram_chat_id')}
               </label>
               <input
                 type="text"
@@ -317,7 +334,7 @@ export default function PipelineConfig() {
               className="btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
             >
-              <Save size={16} /> Lưu vào file config/main.yaml
+              <Save size={16} /> {t('save_to_main_yaml')}
             </button>
           </div>
         </div>
@@ -327,7 +344,7 @@ export default function PipelineConfig() {
           {/* Toolbar */}
           <div style={{
             display: 'flex',
-            justify: 'space-between',
+            justifyContent: 'space-between',
             alignItems: 'center',
             background: 'var(--card-bg)',
             border: '1px solid var(--border-color)',
@@ -339,7 +356,7 @@ export default function PipelineConfig() {
               <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-dim)' }} />
               <input
                 type="text"
-                placeholder="Tìm kiếm pipeline..."
+                placeholder={t('search_pipeline_ph')}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{
@@ -360,7 +377,7 @@ export default function PipelineConfig() {
               className="btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success-color)', color: '#fff' }}
             >
-              <Plus size={16} /> Thêm pipeline mới
+              <Plus size={16} /> {t('add_new_pipeline')}
             </button>
           </div>
 
@@ -369,11 +386,12 @@ export default function PipelineConfig() {
             <table className="schema-table">
               <thead>
                 <tr>
-                  <th>Tên pipeline / File config</th>
-                  <th>Source database</th>
-                  <th>Target warehouse</th>
-                  <th>Bảng theo dõi</th>
-                  <th style={{ textAlign: 'right' }}>Thao tác</th>
+                  <th>{t('col_pipeline_name')}</th>
+                  <th>{t('col_detection_mode')}</th>
+                  <th>{t('col_source_db')}</th>
+                  <th>{t('col_target_wh')}</th>
+                  <th>{t('col_monitored_tables')}</th>
+                  <th style={{ textAlign: 'right' }}>{t('col_actions')}</th>
                 </tr>
               </thead>
 
@@ -389,6 +407,27 @@ export default function PipelineConfig() {
                       </div>
                     </td>
                     <td>
+                      {pipe.detection?.mode === 'event_driven' ? (
+                        <div>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f59e0b', background: '#f59e0b1f', padding: '3px 8px', borderRadius: '4px', border: '1px solid #f59e0b40', textTransform: 'uppercase' }}>
+                            {t('event_driven_kafka')}
+                          </span>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            Topic: <code>{pipe.detection?.kafka?.topic || pipe.name}</code>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#3b82f6', background: '#3b82f61f', padding: '3px 8px', borderRadius: '4px', border: '1px solid #3b82f640', textTransform: 'uppercase' }}>
+                            {t('polling_scanner')}
+                          </span>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                            {t('periodic_scan')}
+                          </div>
+                        </div>
+                      )}
+                    </td>
+                    <td>
                       <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--success-color)', background: 'var(--success-bg)', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--success-border)', textTransform: 'uppercase' }}>
                         {pipe.source?.type}
                       </span>
@@ -398,17 +437,17 @@ export default function PipelineConfig() {
                     </td>
                     <td>
                       <span style={{ fontSize: '0.8rem', fontWeight: 600, color: pipe.target?.type && pipe.target?.type !== 'none' ? 'var(--warning-color)' : 'var(--primary-color)', background: pipe.target?.type && pipe.target?.type !== 'none' ? 'var(--warning-bg)' : 'var(--primary-bg)', padding: '3px 8px', borderRadius: '4px', border: pipe.target?.type && pipe.target?.type !== 'none' ? '1px solid var(--warning-border)' : '1px solid var(--primary-border)', textTransform: 'uppercase' }}>
-                        {pipe.target?.type && pipe.target?.type !== 'none' ? pipe.target.type : `Self-Monitor (${pipe.source?.type})`}
+                        {pipe.target?.type && pipe.target?.type !== 'none' ? pipe.target.type : `SELF-MONITOR (${pipe.source?.type?.toUpperCase()})`}
                       </span>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {pipe.target?.type && pipe.target?.type !== 'none' ? `${pipe.target?.config?.host || 'localhost'}` : 'Chỉ theo dõi Nguồn'}
+                        {pipe.target?.type && pipe.target?.type !== 'none' ? `${pipe.target?.config?.host || 'localhost'}` : t('source_only')}
                       </div>
                     </td>
                     <td>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
-                        {pipe.tables?.map(t => (
-                          <span key={t} style={{ background: 'var(--body-bg)', color: 'var(--primary-color)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.75rem' }}>
-                            {t}
+                        {pipe.tables?.map(tItem => (
+                          <span key={tItem} style={{ background: 'var(--body-bg)', color: 'var(--primary-color)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.75rem' }}>
+                            {tItem}
                           </span>
                         ))}
                       </div>
@@ -420,13 +459,13 @@ export default function PipelineConfig() {
                           className="btn-outline"
                           style={{ padding: '4px 10px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px' }}
                         >
-                          <Edit2 size={12} /> Sửa
+                          <Edit2 size={12} /> {t('edit_btn')}
                         </button>
                         <button
                           onClick={() => handleDeletePipeline(pipe.name)}
                           style={{ padding: '4px 10px', fontSize: '0.8rem', background: 'var(--danger-bg)', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
                         >
-                          <Trash2 size={12} /> Xóa
+                          <Trash2 size={12} /> {t('delete_btn')}
                         </button>
                       </div>
                     </td>
@@ -448,7 +487,7 @@ export default function PipelineConfig() {
           bottom: 0,
           background: 'rgba(0,0,0,0.6)',
           display: 'flex',
-          justify: 'center',
+          justifyContent: 'center',
           alignItems: 'center',
           zIndex: 999
         }}>
@@ -465,7 +504,7 @@ export default function PipelineConfig() {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--primary-color)' }}>
-                {editingPipeline ? `Sửa Pipeline: ${editingPipeline.name}` : 'Tạo Pipeline Mới'}
+                {editingPipeline ? `${t('edit_pipeline_modal_title')}: ${editingPipeline.name}` : t('create_pipeline_modal_title')}
               </h3>
               <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
                 <X size={20} />
@@ -474,24 +513,54 @@ export default function PipelineConfig() {
 
             <form onSubmit={handleSavePipeline}>
               <div style={{ marginBottom: '16px' }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase' }}>Tên Pipeline</label>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase' }}>{t('pipeline_name_label')}</label>
                 <input
                   type="text"
                   required
                   disabled={!!editingPipeline}
-                  placeholder="Ví dụ: pg_to_clickhouse"
+                  placeholder="Ex: pg_to_clickhouse"
                   value={formData.name}
                   onChange={e => setFormData({ ...formData, name: e.target.value })}
                   style={{ width: '100%', padding: '10px', background: 'var(--body-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-main)', outline: 'none' }}
                 />
               </div>
 
+              {/* Detection Section */}
+              <div style={{ background: 'var(--body-bg)', padding: '14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#f59e0b', fontWeight: 700, textTransform: 'uppercase' }}>{t('detection_section_title')}</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: formData.detectionMode === 'event_driven' ? '1fr 1fr' : '1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('detection_mode_label')}</label>
+                    <select
+                      value={formData.detectionMode}
+                      onChange={e => setFormData({ ...formData, detectionMode: e.target.value })}
+                      style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+                    >
+                      <option value="polling">{t('polling_scanner')}</option>
+                      <option value="event_driven">{t('event_driven_kafka')}</option>
+                    </select>
+                  </div>
+                  {formData.detectionMode === 'event_driven' && (
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('kafka_cdc_topic_label')}</label>
+                      <input
+                        type="text"
+                        placeholder={formData.name || 'pg_to_mysql'}
+                        value={formData.kafkaTopic}
+                        onChange={e => setFormData({ ...formData, kafkaTopic: e.target.value })}
+                        style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Source DB Section */}
               <div style={{ background: 'var(--body-bg)', padding: '14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: 'var(--success-color)', fontWeight: 700, textTransform: 'uppercase' }}>SOURCE DATABASE (DB NGUỒN)</h4>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: 'var(--success-color)', fontWeight: 700, textTransform: 'uppercase' }}>{t('source_db_section_title')}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Engine</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('engine_label')}</label>
                     <select
                       value={formData.sourceType}
                       onChange={e => setFormData({ ...formData, sourceType: e.target.value })}
@@ -504,7 +573,7 @@ export default function PipelineConfig() {
                     </select>
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Host</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('host_label')}</label>
                     <input
                       type="text"
                       value={formData.sourceHost}
@@ -513,7 +582,7 @@ export default function PipelineConfig() {
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Port</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('port_label')}</label>
                     <input
                       type="number"
                       value={formData.sourcePort}
@@ -522,7 +591,7 @@ export default function PipelineConfig() {
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Database Name</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('database_name_label')}</label>
                     <input
                       type="text"
                       value={formData.sourceDb}
@@ -535,10 +604,10 @@ export default function PipelineConfig() {
 
               {/* Target DB Section */}
               <div style={{ background: 'var(--body-bg)', padding: '14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: 'var(--warning-color)', fontWeight: 700, textTransform: 'uppercase' }}>TARGET WAREHOUSE (DB ĐÍCH)</h4>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: 'var(--warning-color)', fontWeight: 700, textTransform: 'uppercase' }}>{t('target_wh_section_title')}</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Engine</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('engine_label')}</label>
                     <select
                       value={formData.targetType}
                       onChange={e => setFormData({ ...formData, targetType: e.target.value })}
@@ -547,11 +616,11 @@ export default function PipelineConfig() {
                       <option value="clickhouse">ClickHouse</option>
                       <option value="mysql">MySQL</option>
                       <option value="postgres">PostgreSQL</option>
-                      <option value="none">Self-Monitor Only (Không đồng bộ)</option>
+                      <option value="none">{t('self_monitor_option')}</option>
                     </select>
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Host</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('host_label')}</label>
                     <input
                       type="text"
                       value={formData.targetHost}
@@ -560,7 +629,7 @@ export default function PipelineConfig() {
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Port</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('port_label')}</label>
                     <input
                       type="number"
                       value={formData.targetPort}
@@ -569,7 +638,7 @@ export default function PipelineConfig() {
                     />
                   </div>
                   <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Database Name</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('database_name_label')}</label>
                     <input
                       type="text"
                       value={formData.targetDb}
@@ -582,10 +651,10 @@ export default function PipelineConfig() {
 
               {/* Tables Section */}
               <div style={{ marginBottom: '20px' }}>
-                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase' }}>Danh Sách Bảng Theo Dõi (Phân cách bởi dấu phẩy)</label>
+                <label style={{ display: 'block', marginBottom: '6px', fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase' }}>{t('monitored_tables_input_label')}</label>
                 <input
                   type="text"
-                  placeholder="Ví dụ: users, customers, orders"
+                  placeholder="Ex: users, customers, orders"
                   value={formData.tables}
                   onChange={e => setFormData({ ...formData, tables: e.target.value })}
                   style={{ width: '100%', padding: '10px', background: 'var(--body-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-main)', outline: 'none' }}
@@ -598,14 +667,14 @@ export default function PipelineConfig() {
                   onClick={() => setShowModal(false)}
                   className="btn-outline"
                 >
-                  Hủy Bỏ
+                  {t('cancel_btn')}
                 </button>
                 <button
                   type="submit"
                   className="btn-primary"
                   style={{ background: 'var(--success-color)', color: '#fff' }}
                 >
-                  {editingPipeline ? 'Lưu Thay Đổi (YAML)' : 'Tạo File config/pipelines/*.yaml'}
+                  {editingPipeline ? t('save_changes_btn') : t('create_file_btn')}
                 </button>
               </div>
             </form>

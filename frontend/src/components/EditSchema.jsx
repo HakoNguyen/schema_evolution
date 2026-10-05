@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Save, Type, GripVertical, Database } from 'lucide-react';
 import { useToast } from './NotificationToast';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function EditSchema({ tables, onDeploySuccess }) {
+  const { t } = useLanguage();
   const [selectedKey, setSelectedKey] = useState('');
   const [columns, setColumns] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -80,18 +82,18 @@ export default function EditSchema({ tables, onDeploySuccess }) {
     <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card-bg)' }}>
         <div>
-          <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>Schema Editor</h3>
+          <h3 style={{ margin: '0 0 6px 0', fontSize: '1.05rem', fontWeight: 700, color: 'var(--text-main)' }}>{t('schema_editor_title')}</h3>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Chọn bảng dữ liệu:</span>
+            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t('select_table_edit')}</span>
             <select 
               value={selectedKey} 
               onChange={e => setSelectedKey(e.target.value)}
               style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid var(--border-color)', background: 'var(--body-bg)', color: 'var(--text-main)', minWidth: '260px', outline: 'none', fontSize: '0.85rem' }}
             >
-              <option value="">-- Chọn bảng cần chỉnh sửa --</option>
-              {tables?.map(t => (
-                <option key={t.registry_key} value={t.registry_key}>
-                  {t.pair_name} / {t.table_name}
+              <option value="">{t('select_table_edit_ph')}</option>
+              {tables?.map(tItem => (
+                <option key={tItem.registry_key} value={tItem.registry_key}>
+                  {tItem.pair_name} / {tItem.table_name}
                 </option>
               ))}
             </select>
@@ -111,7 +113,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
           disabled={!selectedKey || columns.length === 0} 
           onClick={handleDeploy}
         >
-          <Save size={16} /> Triển khai schema mới
+          <Save size={16} /> {t('deploy_new_schema')}
         </button>
       </div>
 
@@ -119,10 +121,10 @@ export default function EditSchema({ tables, onDeploySuccess }) {
         {!selectedKey ? (
           <div className="no-data" style={{ padding: '28px', minHeight: '160px' }}>
             <Database size={28} style={{ opacity: 0.3, marginBottom: '10px', color: 'var(--primary-color)' }} />
-            <p style={{ fontSize: '0.875rem' }}>Vui lòng chọn một bảng từ menu ở trên để bắt đầu chỉnh sửa cấu trúc cột.</p>
+            <p style={{ fontSize: '0.875rem' }}>{t('no_table_selected')}</p>
           </div>
         ) : loading ? (
-          <div className="no-data" style={{ minHeight: '160px' }}>Đang tải cấu trúc cột...</div>
+          <div className="no-data" style={{ minHeight: '160px' }}>{t('loading_schema')}</div>
         ) : (
           <>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -131,7 +133,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                   <div style={{ cursor: 'grab', display: 'flex', alignItems: 'center' }}><GripVertical size={16} color="var(--text-dim)" /></div>
                   
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px' }}>Tên cột</label>
+                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px' }}>{t('column_name')}</label>
                     <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
                       <Type size={14} style={{ position: 'absolute', left: '10px', color: 'var(--text-dim)' }} />
                       <input 
@@ -145,7 +147,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                   </div>
 
                   <div style={{ flex: 1 }}>
-                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px' }}>Kiểu dữ liệu</label>
+                    <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-dim)', textTransform: 'uppercase', marginBottom: '4px' }}>{t('data_type')}</label>
 
                     <select 
                       value={col.type} 
@@ -179,7 +181,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                         onChange={e => updateColumn(col.id, 'isPrimary', e.target.checked)}
                         disabled={true} 
                       />
-                      Primary Key
+                      {t('primary_key')}
                     </label>
                   </div>
 
@@ -191,7 +193,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
                         onChange={e => updateColumn(col.id, 'nullable', e.target.checked)}
                         disabled={col.isPrimary} 
                       />
-                      Nullable
+                      {t('nullable')}
                     </label>
                   </div>
 
@@ -211,7 +213,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
               style={{ marginTop: '20px', display: 'flex', alignItems: 'center', gap: '6px', borderStyle: 'dashed' }}
               onClick={addColumn}
             >
-              <Plus size={16} /> Thêm Cột Mới
+              <Plus size={16} /> {t('add_column')}
             </button>
           </>
         )}

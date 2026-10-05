@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Database, Cpu, ShieldCheck, HardDrive, ArrowRight, RefreshCw, AlertTriangle, CheckCircle2, ShieldAlert, ChevronDown, ChevronRight, Layers, Filter } from 'lucide-react';
+import { Database, Cpu, ShieldCheck, HardDrive, ArrowRight, RefreshCw, AlertTriangle, CheckCircle2, ShieldAlert, ChevronDown, ChevronRight, Layers, Filter, Clock } from 'lucide-react';
 import { useToast } from './NotificationToast';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -187,7 +187,7 @@ export default function PipelineTopology() {
                     style={{ 
                       padding: '14px 18px', 
                       display: 'flex', 
-                      justify: 'space-between', 
+                      justifyContent: 'space-between', 
                       alignItems: 'center',
                       cursor: isSingleView ? 'default' : 'pointer',
                       background: isExpanded ? 'var(--card-hover)' : 'var(--body-bg)',
@@ -204,9 +204,9 @@ export default function PipelineTopology() {
                         Pipeline: <code style={{ color: 'var(--primary-color)' }}>{pipeline.name}</code>
                       </span>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginLeft: '6px' }}>
-                        ({pipeline.target?.configured 
-                          ? `${pipeline.source?.type?.toUpperCase()} ➔ ${pipeline.target?.type?.toUpperCase()}` 
-                          : `${pipeline.source?.type?.toUpperCase()} (Self-Monitor)`
+                        ({(pipeline.transport?.kind === 'broker' || pipeline.broker?.kind === 'broker')
+                          ? `${pipeline.source?.type?.toUpperCase()} ➔ ${pipeline.target?.configured ? pipeline.target.type.toUpperCase() : 'SELF-MONITOR'} [CDC]` 
+                          : `${pipeline.source?.type?.toUpperCase()} ➔ ${pipeline.target?.configured ? pipeline.target.type.toUpperCase() : 'SELF-MONITOR'} [Polling]`
                         })
                       </span>
                     </div>
@@ -237,13 +237,22 @@ export default function PipelineTopology() {
 
                         <ArrowRight size={18} color="var(--text-dim)" style={{ flexShrink: 0 }} />
 
-                        {/* Node 2: CDC Broker */}
-                        <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
-                          <Cpu size={22} color="var(--success-color)" style={{ marginBottom: '6px' }} />
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_broker')}</div>
-                          <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Redpanda</div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--success-color)', marginTop: '2px' }}>{pipeline.broker?.topic}</div>
-                        </div>
+                        {/* Node 2: Transport (Kafka Broker vs Polling Scheduler) */}
+                        {(pipeline.transport?.kind === 'broker' || pipeline.broker?.kind === 'broker') ? (
+                          <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
+                            <Cpu size={22} color="var(--success-color)" style={{ marginBottom: '6px' }} />
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_broker')}</div>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Redpanda Kafka</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--success-color)', marginTop: '2px' }}>{pipeline.transport?.topic || pipeline.broker?.topic || pipeline.name}</div>
+                          </div>
+                        ) : (
+                          <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
+                            <Clock size={22} color="var(--primary-color)" style={{ marginBottom: '6px' }} />
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_scheduler')}</div>
+                            <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Polling Scanner</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '2px' }}>Interval: {pipeline.transport?.interval || 60}s</div>
+                          </div>
+                        )}
 
                         <ArrowRight size={18} color="var(--text-dim)" style={{ flexShrink: 0 }} />
 

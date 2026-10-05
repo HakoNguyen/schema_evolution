@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Key, History, Check, X } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function TableDetails({ registryKey, details, refreshDetails }) {
+  const { t } = useLanguage();
   const [versions, setVersions] = useState([]);
   const [selectedVersion, setSelectedVersion] = useState(null);
   const [versionDetails, setVersionDetails] = useState(null);
@@ -30,7 +32,7 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
   }, [registryKey, selectedVersion]);
 
   if (!details || !details.exists) {
-    return <div className="no-data">Không tìm thấy dữ liệu schema. Đang chờ đồng bộ đầu tiên.</div>;
+    return <div className="no-data">{t('no_schema_data')}</div>;
   }
 
   const currentSchema = details.schema;
@@ -40,7 +42,7 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
     <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '24px', color: 'var(--text-main)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
         <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-          Cấu Trúc Schema {versionDetails ? `(Phiên bản ${selectedVersion})` : `(Hiện tại v${details.version})`}
+          {t('schema_structure')} {versionDetails ? `(v${selectedVersion})` : `(${t('current_version')} v${details.version})`}
         </h3>
 
         {versions.length > 0 && (
@@ -59,7 +61,7 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
                 outline: 'none'
               }}
             >
-              <option value="">-- Phiên bản hiện tại v{details.version} --</option>
+              <option value="">-- {t('current_version')} v{details.version} --</option>
               {versions.map(v => (
                 <option key={v.version} value={v.version}>
                   v{v.version} — {v.timestamp ? new Date(v.timestamp).toLocaleString() : '—'}
@@ -74,10 +76,10 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
         <table className="schema-table">
           <thead>
             <tr>
-              <th>CỘT</th>
-              <th>KIỂU DỮ LIỆU</th>
-              <th>NULLABLE</th>
-              <th>GIÁ TRỊ MẶC ĐỊNH</th>
+              <th>{t('col_column_name')}</th>
+              <th>{t('col_data_type')}</th>
+              <th>{t('col_nullable')}</th>
+              <th>{t('col_default_val')}</th>
             </tr>
           </thead>
           <tbody>
@@ -97,12 +99,12 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
         {displaySchema.primary_key && displaySchema.primary_key.length > 0 && (
           <div style={{ fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Key size={14} style={{ color: 'var(--warning-color)' }} />
-            <strong style={{ color: 'var(--warning-color)' }}>Khóa Chính (Primary Key):</strong> <code style={{ color: 'var(--text-main)' }}>{displaySchema.primary_key.join(', ')}</code>
+            <strong style={{ color: 'var(--warning-color)' }}>{t('primary_key_label')}</strong> <code style={{ color: 'var(--text-main)' }}>{displaySchema.primary_key.join(', ')}</code>
           </div>
         )}
         {displaySchema.foreign_keys && displaySchema.foreign_keys.length > 0 && (
           <div style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
-            <strong style={{ color: 'var(--primary-color)' }}>Khóa Ngoại (Foreign Keys):</strong>
+            <strong style={{ color: 'var(--primary-color)' }}>{t('foreign_keys_label')}</strong>
             <ul style={{ marginTop: '6px', paddingLeft: '20px' }}>
               {displaySchema.foreign_keys.map((fk, idx) => (
                 <li key={idx} style={{ marginBottom: '4px' }}>

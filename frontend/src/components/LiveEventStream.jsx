@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Zap, Activity, Clock, Layers, Filter } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 export default function LiveEventStream() {
+  const { t } = useLanguage();
   const [events, setEvents] = useState([]);
   const [isLive, setIsLive] = useState(true);
 
@@ -30,24 +32,24 @@ export default function LiveEventStream() {
       <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card-bg)' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Zap style={{ color: 'var(--primary-color)' }} size={20} /> Live CDC Event Stream
+            <Zap style={{ color: 'var(--primary-color)' }} size={20} /> {t('live_stream_title')}
           </h3>
           <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-            Luồng audit log trực tiếp bắt các sự kiện DDL / Payload CDC từ Redpanda Kafka Broker
+            {t('live_stream_sub')}
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: isLive ? 'var(--success-color)' : 'var(--text-dim)' }}></span>
-            {isLive ? 'Real-Time Streaming Active' : 'Paused'}
+            {isLive ? t('streaming_active') : t('paused')}
           </span>
           <button 
             className="btn-outline"
             style={{ padding: '6px 14px', fontSize: '0.8rem' }}
             onClick={() => setIsLive(!isLive)}
           >
-            {isLive ? 'Tạm dừng' : 'Tiếp tục stream'}
+            {isLive ? t('pause_stream') : t('resume_stream')}
           </button>
         </div>
       </div>
@@ -58,10 +60,10 @@ export default function LiveEventStream() {
           <div className="no-data" style={{ padding: '28px', minHeight: '180px' }}>
             <Activity size={28} style={{ opacity: 0.3, marginBottom: '10px', color: 'var(--primary-color)' }} className="spin" />
             <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
-              Đang lắng nghe sự kiện CDC thời gian thực
+              {t('listening_events')}
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', maxWidth: '420px' }}>
-              Hệ thống đang kết nối tới Redpanda Broker topic. Sự kiện thay đổi DDL/Schema từ Database Nguồn sẽ tự động xuất hiện tại đây.
+              {t('listening_desc')}
             </div>
           </div>
         ) : (
@@ -92,7 +94,7 @@ export default function LiveEventStream() {
                         background: isBreaking ? 'var(--danger-bg)' : 'var(--success-bg)',
                         color: isBreaking ? 'var(--danger-color)' : 'var(--success-color)'
                       }}>
-                        {isBreaking ? 'Cần phê duyệt' : 'Tự động đồng bộ'}
+                        {isBreaking ? t('requires_approval') : t('auto_synced_badge')}
                       </span>
                       <strong style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{evt.table || evt.table_name || 'CDC Event'}</strong>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pipeline: <code style={{ color: 'var(--primary-color)' }}>{evt.pipeline || 'default'}</code></span>
@@ -104,7 +106,7 @@ export default function LiveEventStream() {
                   </div>
 
                   <div style={{ textAlign: 'right', fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <Clock size={12} /> {evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : 'Vừa xong'}
+                    <Clock size={12} /> {evt.timestamp ? new Date(evt.timestamp).toLocaleTimeString() : 'Just now'}
                   </div>
                 </div>
               );

@@ -1,4 +1,6 @@
 name: "mysql_self_monitor"
+detection:
+  mode: "polling"
 source:
   type: "mysql"
   config:
@@ -10,3 +12,4 @@ source:
 tables:
   - customers
   - orders
+
