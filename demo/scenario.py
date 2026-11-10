@@ -60,7 +60,11 @@ def _target_type(ch, column: str) -> str | None:
 
 
 def run(step: str, timeout: float) -> float | None:
-    s = STEPS[step]
+    return run_step(step, STEPS[step], timeout)
+
+
+def run_step(step: str, s: dict, timeout: float) -> float | None:
+    """Chạy SQL của bước trên nguồn, trả về số giây tới khi engine phản ứng (None = quá timeout)."""
     print(f"\n▶ {step}: {s['story']}\n  SQL: {s['sql']}")
     ch = clickhouse_connect.get_client(**c.CH)
     registry = SchemaRegistry(c.REGISTRY_DIR)
@@ -73,15 +77,17 @@ def run(step: str, timeout: float) -> float | None:
     t0 = time.monotonic()
     pg.close()
 
-    if s["expect"] == "clear":
-        time.sleep(3)  # để engine kịp kiểm tra message mang schema mới
-        frozen = registry.is_frozen(c.REGISTRY_KEY)
-        print("  ✓ nguồn đã khớp baseline, engine gỡ freeze, loader chạy tiếp" if not frozen
-              else "  ✗ bảng vẫn đang freeze (nguồn còn lệch baseline?)")
-        return None
-
     while time.monotonic() - t0 < timeout:
-        if s["expect"] == "target":
+        if s["expect"] == "clear":
+            try:
+                frozen = registry.is_frozen(c.REGISTRY_KEY)
+            except ValueError:
+                frozen = True  # registry đang được ghi dở -> đọc lại
+            if not frozen:
+                dt = time.monotonic() - t0
+                print(f"  ✓ nguồn đã khớp baseline, engine gỡ freeze sau {dt:.2f}s, loader chạy tiếp")
+                return dt
+        elif s["expect"] == "target":
             typ = _target_type(ch, s["column"])
             if typ and s.get("type_contains", "") in typ:
                 dt = time.monotonic() - t0

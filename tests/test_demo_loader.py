@@ -62,8 +62,18 @@ def test_clickhouse_varchar_is_string():
     print("[PASS] test_clickhouse_varchar_is_string")
 
 
+def test_bench_percentile():
+    from demo.bench import pct, summarize
+    v = [0.9, 1.1, 1.0, 1.3, 5.0, 1.2, 1.0, 0.8, 1.1, 1.0]
+    assert pct(v, 50) == 1.0 and pct(v, 95) == 5.0 and pct(v, 100) == 5.0
+    assert pct([2.0], 95) == 2.0
+    assert summarize([])["n"] == 0
+    print("[PASS] test_bench_percentile")
+
+
 if __name__ == "__main__":
     test_decode_decimal()
     test_parse_message()
     test_clickhouse_varchar_is_string()
+    test_bench_percentile()
     print("\nALL DEMO LOADER TESTS PASSED!")

@@ -18,8 +18,10 @@ lỗi và dừng hẳn (task FAILED) -> dữ liệu ngừng chảy vào warehous
 import argparse
 import base64
 import json
+import os
 import sys
 import time
+from collections import deque
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -28,6 +30,33 @@ from kafka import KafkaConsumer
 
 import demo  # noqa: F401  (UTF-8 console)
 from demo import config as c
+
+RATE_WINDOW_SECONDS = 5
+
+
+class StatusFile:
+    """Trạng thái loader cho UI (API /api/flow đọc data/flow/<name>.json)."""
+
+    def __init__(self, name: str, database: str):
+        c.FLOW_DIR.mkdir(parents=True, exist_ok=True)
+        self.path = c.FLOW_DIR / f"{name}.json"
+        self.data = {"name": name, "database": database, "state": "starting", "rows_per_sec": 0.0}
+        self.written_at = 0.0
+
+    def update(self, state: str, **fields) -> None:
+        changed = state != self.data["state"]
+        self.data.update(fields, state=state, updated_at=time.time())
+        if "held_columns" not in fields:
+            self.data.pop("held_columns", None)
+        if not changed and time.monotonic() - self.written_at < 1:
+            return
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.data, default=str), encoding="utf-8")
+        try:
+            os.replace(tmp, self.path)
+        except PermissionError:
+            pass  # Windows: API đang mở file để đọc -> bỏ lượt này, ghi lại sau <=1s
+        self.written_at = time.monotonic()
 
 DECIMAL = "org.apache.kafka.connect.data.Decimal"
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -77,8 +106,8 @@ def parse_message(raw: bytes | None) -> dict | None:
 
 
 class ClickHouseTable:
-    def __init__(self, client, table: str):
-        self.client, self.table = client, table
+    def __init__(self, client, table: str, status: StatusFile | None = None, gate=None):
+        self.client, self.table, self.status, self.gate = client, table, status, gate
         self.columns: set[str] = set()
         self.refresh()
 
@@ -105,6 +134,10 @@ class ClickHouseTable:
         self.refresh()
         started = next_log = time.monotonic()
         while missing := needed - self.columns:
+            if self.status:
+                # Đích thiếu cột VÌ bảng đang chờ duyệt (VD rename) -> báo "paused" để UI hiện nút duyệt.
+                frozen = self.gate is not None and self.gate.check()
+                self.status.update("paused" if frozen else "hold", held_columns=sorted(missing), rows_per_sec=0.0)
             if time.monotonic() >= next_log:
                 print(f"[loader] HOLD: bảng đích chưa có cột {sorted(missing)} "
                       f"-> chờ engine đồng bộ schema ({time.monotonic() - started:.0f}s)")
@@ -125,10 +158,11 @@ class ClickHouseTable:
 class FreezeGate:
     """Đọc trạng thái freeze của bảng trong Schema Registry do engine ghi."""
 
-    def __init__(self):
+    def __init__(self, status: StatusFile):
         from src.schema_evolution.core import SchemaRegistry
         self.registry = SchemaRegistry(c.REGISTRY_DIR)
         self.frozen = False
+        self.status = status
 
     def check(self) -> bool:
         try:
@@ -142,6 +176,7 @@ class FreezeGate:
             return
         started = next_log = time.monotonic()
         while self.check():
+            self.status.update("paused", rows_per_sec=0.0)
             if time.monotonic() >= next_log:
                 print(f"[loader] PAUSE: bảng {c.REGISTRY_KEY} đang bị freeze (thay đổi breaking chờ duyệt) "
                       f"-> dừng ghi, dữ liệu giữ trong Kafka ({time.monotonic() - started:.0f}s)")
@@ -157,9 +192,10 @@ def main():
     database = c.CH_NAIVE_DATABASE if naive else c.CH_DATABASE
     name = "naive-loader" if naive else "loader"
 
+    status = StatusFile(name, database)
     client = clickhouse_connect.get_client(**c.CH, database=database)
-    table = ClickHouseTable(client, c.SOURCE_TABLE)
-    gate = None if naive else FreezeGate()
+    gate = None if naive else FreezeGate(status)
+    table = ClickHouseTable(client, c.SOURCE_TABLE, status, gate)
     consumer = KafkaConsumer(
         c.TOPIC,
         bootstrap_servers=c.KAFKA_BOOTSTRAP,
@@ -173,6 +209,7 @@ def main():
     print(f"[{name}] {c.TOPIC} -> clickhouse {database}.{c.SOURCE_TABLE}")
 
     loaded, last_report, last_lag = 0, time.monotonic(), None
+    window: deque[tuple[float, int]] = deque()  # (thời điểm ghi xong, số dòng) trong RATE_WINDOW_SECONDS
     while True:
         polled = consumer.poll(timeout_ms=500)
         rows = [r for msgs in polled.values() for m in msgs if (r := parse_message(m.value)) is not None]
@@ -181,19 +218,25 @@ def main():
                 try:
                     table.write_naive(rows)
                 except Exception as e:
-                    print(f"[{name}] FAILED: {type(e).__name__}: {str(e).strip().splitlines()[0][:300]}")
+                    error = f"{type(e).__name__}: {str(e).strip().splitlines()[0][:300]}"
+                    status.update("failed", error=error, rows_per_sec=0.0)
+                    print(f"[{name}] FAILED: {error}")
                     print(f"[{name}] task dừng hẳn — warehouse {database} không nhận thêm dữ liệu nào nữa.")
                     sys.exit(1)
             else:
                 gate.wait_until_open()
                 table.write(rows)
             loaded += len(rows)
+            window.append((time.monotonic(), len(rows)))
             tt = max((r["trade_time"] for r in rows if isinstance(r.get("trade_time"), datetime)), default=None)
             if tt:
                 last_lag = (datetime.now(timezone.utc) - tt).total_seconds()
         if polled:
             consumer.commit()
         now = time.monotonic()
+        while window and now - window[0][0] > RATE_WINDOW_SECONDS:
+            window.popleft()
+        status.update("running", rows_per_sec=round(sum(n for _, n in window) / RATE_WINDOW_SECONDS, 1))
         if now - last_report >= 5:
             lag = f"{last_lag:.2f}s" if last_lag is not None else "-"
             print(f"[{name}] {loaded / (now - last_report):6.1f} row/s | e2e lag {lag}")

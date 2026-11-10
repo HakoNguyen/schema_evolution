@@ -1,5 +1,9 @@
 """Kết nối dùng chung cho demo (từ máy host tới các container Docker)."""
 import os
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+FLOW_DIR = ROOT / "data" / "flow"  # loader ghi trạng thái ở đây, API /api/flow đọc
 
 PG = {
     "host": os.getenv("DEMO_PG_HOST", "localhost"),

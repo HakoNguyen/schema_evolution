@@ -7,7 +7,7 @@ Trong lúc dữ liệu đang chảy, ta thay đổi schema của nguồn để c
 2. Thay đổi nguy hiểm (breaking) bị chặn lại để chờ người duyệt.
 3. **Không mất dòng dữ liệu nào** trong suốt quá trình.
 
-> Trạng thái: **Phase 0, 1 và 2 đã xong** (cập nhật 10/11/2026). Xem [Lộ trình](#lộ-trình) ở cuối file.
+> Trạng thái: **Phase 0 đến 3 đã xong** (cập nhật 10/11/2026). Xem [Lộ trình](#lộ-trình) ở cuối file.
 
 ---
 
@@ -40,13 +40,27 @@ Binance WebSocket ──► ingestor ──► Postgres  exchange.public.trades 
 | [`loader.py`](loader.py) | Kafka → ClickHouse (data plane). Có `--naive` cho pipeline đối chứng |
 | [`check.py`](check.py) | Đối chiếu nguồn với đích: số dòng, mất dòng, độ trễ, kèm pipeline đối chứng |
 | [`scenario.py`](scenario.py) | Các bước kịch bản: chạy `ALTER` trên nguồn và đo thời gian engine phản ứng |
+| [`bench.py`](bench.py) | Đo cho báo cáo: `schema` (lặp N lần, p50/p95) và `soak` (chạy liên tục M phút) |
+| [`results/`](results/) | Kết quả đo dạng JSON, dùng làm bằng chứng cho báo cáo |
+| [`start.ps1`](start.ps1) | Khởi động toàn bộ demo bằng một lệnh, mỗi tiến trình một cửa sổ |
+| `GET /api/flow` ([`../api/main.py`](../api/main.py)) | Số liệu cho UI: đối chiếu, giá mới nhất, trạng thái 2 loader (đọc từ `data/flow/*.json` do loader ghi) |
+| [`../frontend/src/components/DataFlow.jsx`](../frontend/src/components/DataFlow.jsx) | Trang **Live Data Flow** trên UI, là màn hình chính của buổi demo |
 | [`../config/pipelines/market_trades.yaml`](../config/pipelines/market_trades.yaml) | Khai báo pipeline cho engine |
 
 ---
 
 ## Chạy demo
 
-Mọi lệnh chạy từ thư mục gốc repo, với venv đã kích hoạt (`.\venv\Scripts\Activate.ps1`).
+**Cách nhanh (dùng cho ngày demo):** bật Docker Desktop, rồi chạy
+
+```powershell
+powershell -ExecutionPolicy Bypass -File demo\start.ps1 -Reset
+# mất mạng: thêm  -Replay demo\recordings\binance_trades.jsonl
+```
+
+Script này bật hạ tầng, reset về schema v1, rồi mở 6 cửa sổ: backend, frontend, ingestor, loader, naive-loader và check. **Backend được bật trước** để consumer group của engine ổn định trước khi dữ liệu chảy vào. Sau đó **chờ khoảng 60 giây** rồi mới mở http://localhost:5173.
+
+**Cách thủ công:** mọi lệnh chạy từ thư mục gốc repo, với venv đã kích hoạt (`.\venv\Scripts\Activate.ps1`). Cài thư viện bằng `pip install -r requirements.txt`. **Bắt buộc phải có `crc32c`**, xem phần [Kết quả phase 4](#kết-quả-phase-4-đo-đạc-và-tập-dượt).
 
 ```powershell
 # 1. Hạ tầng. Chỉ cần Postgres, ClickHouse và stack Redpanda/Debezium
@@ -56,18 +70,31 @@ docker compose -f debezium/docker-compose.yml up -d
 # 2. Tạo DB, bảng và connector. Chạy lại nhiều lần không sao
 python -m demo.setup
 
-# 3. Mỗi lệnh dưới đây chạy trong một terminal riêng
+# 3. Mỗi lệnh dưới đây chạy trong một terminal riêng, theo đúng thứ tự (backend trước)
+uvicorn api.main:app --port 8000         # engine + API
+cd frontend; npm run dev                 # UI tại http://localhost:5173
 python -m demo.ingestor                  # trade thật -> Postgres
 python -m demo.loader                    # Kafka -> ClickHouse (có engine bảo vệ)
 python -m demo.loader --naive            # pipeline đối chứng (không có engine)
-uvicorn api.main:app --port 8000         # engine + API
-cd frontend; npm run dev                 # UI tại http://localhost:5173
 python -m demo.check --watch             # bảng đối chiếu, cập nhật mỗi 2s
 ```
 
 Các trang hữu ích:
 - Redpanda Console (xem message CDC): http://localhost:8086
 - Debezium Connect: http://localhost:8083/connectors/market-trades-source/status
+
+### Cảnh báo Telegram khi có thay đổi breaking (tùy chọn)
+
+1. Trên Telegram, chat với **@BotFather**, gõ `/newbot` để lấy token. Sau đó nhắn một tin bất kỳ cho bot vừa tạo.
+2. Lấy `chat_id` của bạn: mở `https://api.telegram.org/bot<TOKEN>/getUpdates`, tìm `"chat":{"id":...}`.
+3. Ghi vào **`config/secrets.env`** (đã gitignore; copy từ `config/secrets.env.example` nếu chưa có file):
+   ```ini
+   TELEGRAM_BOT_TOKEN=<token>
+   TELEGRAM_CHAT_ID=<chat_id>
+   ```
+   `config/main.yaml` chỉ tham chiếu `${TELEGRAM_BOT_TOKEN}`. Engine tự áp dụng trong khoảng 3 giây, không cần khởi động lại.
+
+Không đặt token cũng không sao: engine sẽ bỏ qua bước gửi cảnh báo, không làm chậm luồng xử lý. **Không ghi token thẳng vào `config/main.yaml`**, vì file này được commit lên git.
 
 ### Đưa về trạng thái sạch (trước mỗi lần tập dượt)
 
@@ -184,7 +211,7 @@ Khoảng chờ 44 giây là do engine đang ở chế độ quét định kỳ. 
 
 (*) Riêng lần `rename` này, backend vừa được khởi động lại ngay trước đó. Kafka phải chờ hết thời gian timeout của consumer cũ (bị tắt đột ngột) rồi mới giao partition cho consumer mới. Khi chạy ổn định, các thay đổi breaking bị freeze trong khoảng 1 giây (xem `narrow`). **Đừng khởi động lại backend ngay trước khi demo.**
 
-### Bug phát hiện và đã sửa trong phase 2
+### Bug phát hiện và đã sửa trong phase 2 (xem bảng dưới); phase 3 ở mục tiếp theo
 
 | Bug | Ảnh hưởng | Cách sửa |
 |---|---|---|
@@ -194,6 +221,31 @@ Khoảng chờ 44 giây là do engine đang ở chế độ quét định kỳ. 
 | Bảng đang freeze thì không bao giờ được kiểm tra lại | Rollback nguồn xong bảng vẫn đóng băng vĩnh viễn | `resolved_at_source` ([`core.py`](../src/schema_evolution/core.py)), có [test](../tests/test_freeze_resolution.py) |
 | Loader khởi động trước khi topic CDC tồn tại | Đứng ở 0 row/s tới 5 phút | `metadata_max_age_ms=5000` |
 | Consumer in một dòng log cho mỗi message | Log ồn, tốn tài nguyên | Bỏ dòng log đó |
+
+---
+
+## Phase 3: trang Live Data Flow
+
+Trang mặc định của UI tại http://localhost:5173. Mọi thứ cần cho buổi demo nằm trên **một màn hình**, tự cập nhật mỗi 1,5 giây.
+
+| Khu vực | Hiển thị |
+|---|---|
+| Tiêu đề | Đường đi của dữ liệu (Binance → Postgres → Debezium → Redpanda → ClickHouse) và **giá thật mới nhất** của 6 coin, đổi màu xanh hoặc đỏ khi giá lên hoặc xuống |
+| 5 thẻ số liệu | Số dòng nguồn, số dòng warehouse, **dòng bị mất** (kèm "đã đối chiếu tới mốc X: a = b"), độ trễ end-to-end, thông lượng kèm sparkline 2 phút (rê chuột để xem giá trị) |
+| Làn "Có Schema Evolution Engine" | Trạng thái loader: Đang chạy / Chờ đồng bộ schema (kèm tên cột đang chờ) / **Tạm dừng: chờ duyệt, kèm nút Review & Approve** / Đã dừng |
+| Làn "Đối chứng" | Đang chạy, rồi **Đã hỏng kèm thông báo lỗi thật**; số dòng chưa tới warehouse tăng dần |
+| Live CDC Event Stream | Timeline sự kiện: Auto Synced / Requires Approval / **Approved / Rejected / Resolved at source** |
+
+Đã kiểm chứng bằng cách điều khiển trình duyệt (Playwright) theo đúng thao tác của người trình bày, khi dữ liệu thật đang chảy:
+1. Chạy `scenario rename`: bảng bị freeze sau **0,72 giây**, làn chính chuyển sang "Tạm dừng: chờ duyệt".
+2. Bấm **Review & Approve**, chạy sandbox (passed), rồi Approve.
+3. Quay lại Live Data Flow: làn chính "Đang chạy", **dòng bị mất = 0**; làn đối chứng "Đã hỏng" và thiếu 18.004 dòng.
+
+Chi tiết cài đặt:
+- Loader ghi `data/flow/loader.json` và `data/flow/naive-loader.json` (trạng thái, số dòng/giây, các cột đang chờ, lỗi). Nếu file không được cập nhật quá 5 giây thì loader bị coi là đã dừng.
+- Khi loader đang chờ một cột mà bảng lại đang bị freeze (trường hợp rename), trạng thái được báo là "paused" chứ không phải "hold", để UI hiện nút duyệt.
+- Approve và Reject trên API giờ ghi sự kiện vào timeline. Nút "Review & Approve" của một sự kiện cũ tự ẩn khi đã có kết quả duyệt.
+- Event log chỉ lưu **trong bộ nhớ**, nên khởi động lại backend sẽ xóa timeline. Đây là thêm một lý do để không khởi động lại backend trong lúc demo.
 
 ---
 
@@ -217,7 +269,7 @@ Khoảng chờ 44 giây là do engine đang ở chế độ quét định kỳ. 
 - [x] **Phase 0**: kiểm tra định dạng message, fingerprint, độ dài varchar, sửa bug FixedString
 - [x] **Phase 1**: ingestor (live, record, replay), bảng nguồn và đích, connector, loader có HOLD, đối chiếu theo mốc, setup/reset
 - [x] **Phase 2**: fingerprint và chế độ `event_driven`, loader PAUSE theo freeze, pipeline đối chứng `--naive`, `scenario.py`, tự gỡ freeze khi nguồn rollback, cùng 6 bug đã sửa (xem bên trên)
-- [ ] **Phase 3**: `/api/flow` và panel trên UI (số dòng mỗi giây, số dòng nguồn và đích, độ trễ, trạng thái loader)
+- [x] **Phase 3**: `/api/flow`, trang Live Data Flow (thẻ số liệu, sparkline, 2 làn pipeline, nút duyệt, timeline có cả Approved/Rejected/Resolved)
 - [ ] **Phase 4**: đo p50/p95 qua nhiều lần chạy, thử replay, chạy liên tục lâu, tập dượt
 
 ### Kịch bản cho ngày demo (thứ Năm)
@@ -226,10 +278,10 @@ Trước buổi demo: chạy `--reset`, khởi động 4 tiến trình cùng UI,
 
 | Bước | Lệnh | Kết quả mong đợi (đã kiểm chứng trong phase 2) |
 |---|---|---|
-| 0 | `python -m demo.check --watch` | Hai pipeline đều chảy, KHỚP |
-| 1 | `python -m demo.scenario add_column` | **Đối chứng FAILED.** Có engine: tự thêm cột sau khoảng 1 giây, không gián đoạn |
+| 0 | Mở **Live Data Flow** trên UI | Giá coin nhảy, hai làn đều "Đang chạy", dòng bị mất = 0 |
+| 1 | `python -m demo.scenario add_column` | **Làn đối chứng chuyển sang "Đã hỏng".** Có engine: tự thêm cột sau khoảng 1 giây, không gián đoạn |
 | 2 | `python -m demo.scenario widen` | WIDEN, tự áp dụng sau khoảng 1,4 giây |
-| 3 | `python -m demo.scenario rename` | Freeze, loader dừng. Trên UI: chạy sandbox, Approve, loader xử lý phần tồn |
+| 3 | `python -m demo.scenario rename` | Làn chính "Tạm dừng: chờ duyệt". Bấm **Review & Approve**, chạy sandbox, Approve, quay lại Data Flow: loader xử lý phần tồn |
 | 4 | `python -m demo.scenario narrow` | Thu hẹp kiểu bị bắt sau khoảng 1 giây, loader PAUSE |
 | 5 | `python -m demo.scenario rollback` | Engine tự gỡ freeze, loader chạy tiếp |
 | 6 | `python -m demo.check` | **KHỚP, mất 0 dòng.** Pipeline đối chứng: thiếu hàng nghìn dòng |

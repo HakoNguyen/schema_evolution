@@ -7,13 +7,14 @@ import EditSchema from './components/EditSchema';
 import PipelineTopology from './components/PipelineTopology';
 import LiveEventStream from './components/LiveEventStream';
 import PipelineConfig from './components/PipelineConfig';
+import DataFlow from './components/DataFlow';
 import { useToast } from './components/NotificationToast';
 import { useLanguage } from './context/LanguageContext';
 import { Languages, Sun, Moon, ArrowLeft } from 'lucide-react';
 
 function App() {
   const [tables, setTables] = useState([]);
-  const [activePage, setActivePage] = useState('monitored_tables'); // 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
+  const [activePage, setActivePage] = useState('data_flow'); // 'data_flow' | 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
   const [selectedKey, setSelectedKey] = useState(null);
   const [details, setDetails] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -86,6 +87,7 @@ function App() {
           <div className="header-breadcrumbs">
             <span>{t('clusters')}</span> / 
             {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> {t('monitored_tables')}</span>}
+            {activePage === 'data_flow' && <span className="highlight"> {t('data_flow')}</span>}
             {activePage === 'pipeline_topology' && <span className="highlight"> {t('pipeline_topology')}</span>}
             {activePage === 'live_events' && <span className="highlight"> {t('live_cdc_stream')}</span>}
             {activePage === 'pipeline_config' && <span className="highlight"> {t('pipeline_config')}</span>}
@@ -114,6 +116,11 @@ function App() {
         </header>
 
         <div className="content-scroll">
+          {/* PAGE: Live Data Flow (demo pipeline) */}
+          {activePage === 'data_flow' && (
+            <DataFlow onReview={(key) => { setActivePage('monitored_tables'); setSelectedKey(key); setRefreshTrigger(p => p + 1); }} />
+          )}
+
           {/* PAGE: Pipeline Topology */}
           {activePage === 'pipeline_topology' && <PipelineTopology />}
 

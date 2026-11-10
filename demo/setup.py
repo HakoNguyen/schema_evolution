@@ -81,8 +81,9 @@ def reset() -> None:
         admin.delete_groups(groups)
     admin.close()
 
-    print("[reset] registry")
+    print("[reset] registry + trạng thái loader")
     shutil.rmtree(ROOT / "data" / "registry" / c.PIPELINE_NAME, ignore_errors=True)
+    shutil.rmtree(c.FLOW_DIR, ignore_errors=True)
 
 
 def setup() -> None:

@@ -1,11 +1,12 @@
 import React from 'react';
-import { Database, Network, Zap, LayoutTemplate, Sliders, GitBranch } from 'lucide-react';
+import { Database, Network, Zap, LayoutTemplate, Sliders, GitBranch, Activity } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 export default function Sidebar({ activePage, setActivePage }) {
   const { t } = useLanguage();
 
   const menuItems = [
+    { id: 'data_flow', label: t('data_flow'), icon: <Activity size={18} /> },
     { id: 'monitored_tables', label: t('monitored_tables'), icon: <Database size={18} /> },
     { id: 'pipeline_topology', label: t('pipeline_topology'), icon: <Network size={18} /> },
     { id: 'live_events', label: t('live_cdc_stream'), icon: <Zap size={18} /> },
@@ -26,7 +27,11 @@ export default function Sidebar({ activePage, setActivePage }) {
             <div
               key={item.id}
               className={`table-item ${activePage === item.id ? 'active' : ''}`}
+              role="button"
+              tabIndex={0}
+              aria-current={activePage === item.id ? 'page' : undefined}
               onClick={() => setActivePage(item.id)}
+              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), setActivePage(item.id))}
             >
               <div className="table-icon">
                 {React.cloneElement(item.icon, { size: 16 })}

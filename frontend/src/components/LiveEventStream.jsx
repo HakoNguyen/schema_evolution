@@ -69,14 +69,22 @@ export default function LiveEventStream({ onReviewTable }) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {events.map((evt, idx) => {
-              const isBreaking = evt.type === 'breaking' || evt.status === 'breaking_detected';
-              const isNonBreaking = evt.type === 'non_breaking' || evt.status === 'auto_applied';
+              const isBreaking = evt.status === 'breaking_detected';
+              // Nhãn theo trạng thái thật của sự kiện, không chỉ breaking / non-breaking.
+              const badge = {
+                breaking_detected: ['requires_approval', 'warning'],
+                approved: ['evt_approved', 'success'],
+                rejected: ['evt_rejected', 'muted'],
+                resolved_at_source: ['evt_resolved', 'success'],
+              }[evt.status] || ['auto_synced_badge', 'success'];
+              const tone = { warning: 'var(--warning-color)', success: 'var(--success-color)', muted: 'var(--text-dim)' }[badge[1]];
+              const toneBg = { warning: 'var(--warning-bg)', success: 'var(--success-bg)', muted: 'var(--card-hover)' }[badge[1]];
 
               return (
                 <div key={idx} style={{
                   background: 'var(--body-bg)',
                   border: '1px solid var(--border-color)',
-                  borderLeft: isBreaking ? '3px solid var(--warning-color)' : isNonBreaking ? '3px solid var(--success-color)' : '3px solid var(--border-subtle)',
+                  borderLeft: `3px solid ${tone}`,
                   borderRadius: '8px',
                   padding: '14px 18px',
                   display: 'flex',
@@ -91,10 +99,10 @@ export default function LiveEventStream({ onReviewTable }) {
                         padding: '2px 8px',
                         borderRadius: '4px',
                         textTransform: 'none',
-                        background: isBreaking ? 'var(--warning-bg)' : 'var(--success-bg)',
-                        color: isBreaking ? 'var(--warning-color)' : 'var(--success-color)'
+                        background: toneBg,
+                        color: tone
                       }}>
-                        {isBreaking ? t('requires_approval') : t('auto_synced_badge')}
+                        {t(badge[0])}
                       </span>
                       <strong style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{evt.table || evt.table_name || 'CDC Event'}</strong>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}><code style={{ color: 'var(--text-dim)' }}>{evt.pipeline || 'default'}</code></span>
@@ -106,7 +114,10 @@ export default function LiveEventStream({ onReviewTable }) {
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                    {isBreaking && onReviewTable && (
+                    {isBreaking && onReviewTable && !events.slice(0, idx).some(e =>
+                      // Sự kiện mới hơn (đứng trước trong danh sách) đã kết thúc yêu cầu duyệt này.
+                      e.pipeline === evt.pipeline && e.table === evt.table &&
+                      ['approved', 'rejected', 'resolved_at_source'].includes(e.status)) && (
                       <button
                         className="btn-outline"
                         style={{ padding: '5px 12px', fontSize: '0.78rem', fontWeight: 500 }}
