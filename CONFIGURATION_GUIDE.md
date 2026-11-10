@@ -169,7 +169,7 @@ source:
 ```
 
 > [!NOTE]
-> Engine tạo **một Kafka consumer cho mỗi cluster**. Consumer chỉ chuyển message tới worker của pipeline tương ứng, việc kiểm tra schema chạy trong worker đó. Vì vậy một pipeline chậm không làm chậm các pipeline khác dùng chung cluster. Thêm hoặc bớt pipeline thì consumer tự cập nhật danh sách topic.
+> Engine tạo **một Kafka consumer cho mỗi cluster**. Consumer chỉ chuyển message tới worker của pipeline tương ứng, việc kiểm tra schema chạy trong worker đó. Vì vậy một pipeline chậm không làm chậm các pipeline khác dùng chung cluster. Thêm hoặc bớt pipeline thì consumer tự cập nhật danh sách topic. Nhiều pipeline có thể dùng chung một `topic` (cùng một Debezium connector): message được chuyển tới **mọi** pipeline có khai báo bảng đó trong `tables`, pipeline không khai báo thì bỏ qua.
 
 ### C. Chạy engine
 Engine tự chạy cùng API server (`uvicorn api.main:app --port 8000`). Muốn chạy engine độc lập, không kèm API:

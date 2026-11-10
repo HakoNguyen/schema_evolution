@@ -73,8 +73,10 @@ def _schema_fingerprint(data: dict, data_dict) -> str | None:
 
 def route_message(message, workers: list) -> None:
     """Xác định pipeline + bảng của message rồi báo cho worker (không chạy kiểm tra ở đây)."""
-    worker = next((w for w in workers if w.matches(message.topic)), None)
-    if worker is None:
+    # Nhiều pipeline có thể dùng chung 1 topic prefix (1 Debezium connector/DB, mỗi pipeline vài bảng):
+    # xét MỌI pipeline khớp topic, mỗi pipeline chỉ nhận bảng thuộc cấu hình của nó.
+    candidates = [w for w in workers if w.matches(message.topic)]
+    if not candidates:
         return
     data = json.loads(message.value.decode("utf-8"))
     payload = data.get("payload", data)
@@ -94,8 +96,9 @@ def route_message(message, workers: list) -> None:
         raw_table = message.topic.rsplit(".", 1)[-1]
     # DDL event luôn buộc kiểm tra (fingerprint None); message dữ liệu chỉ khi cấu trúc đổi.
     fingerprint = None if ddl else _schema_fingerprint(data, data_dict)
-    for table in _resolve_tables(raw_table, worker.spec):
-        worker.notify(table, fingerprint)
+    for worker in candidates:
+        for table in _resolve_tables(raw_table, worker.spec):
+            worker.notify(table, fingerprint)
 
 
 def _consumer_kwargs(bootstrap: str, kafka_cfg: dict) -> dict:

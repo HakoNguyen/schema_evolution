@@ -47,7 +47,32 @@ def test_schemaless_falls_back_to_keys():
     print("[PASS] test_schemaless_falls_back_to_keys")
 
 
+def test_shared_topic_prefix_routes_to_owning_pipeline():
+    import json
+    from types import SimpleNamespace
+    from app.kafka_consumer import _topic_matches, route_message
+
+    class Worker:
+        def __init__(self, name, tables):
+            self.spec, self.topic, self.notified = {"name": name, "tables": tables}, "market", []
+
+        def matches(self, topic):
+            return _topic_matches(topic, self.topic)
+
+        def notify(self, table, fp):
+            self.notified.append(table)
+
+    trades, tickers = Worker("market_trades", ["trades"]), Worker("market_tickers", ["tickers"])
+    msg = lambda table: SimpleNamespace(topic=f"market.public.{table}", value=json.dumps(
+        {"payload": {"op": "c", "after": {"id": 1}, "source": {"table": table}}}).encode())
+    route_message(msg("tickers"), [trades, tickers])   # trước đây: chỉ worker khớp đầu tiên (trades) nhận -> bỏ qua
+    route_message(msg("trades"), [trades, tickers])
+    assert trades.notified == ["trades"] and tickers.notified == ["tickers"]
+    print("[PASS] test_shared_topic_prefix_routes_to_owning_pipeline")
+
+
 if __name__ == "__main__":
+    test_shared_topic_prefix_routes_to_owning_pipeline()
     test_same_structure_same_fingerprint()
     test_ddl_changes_fingerprint()
     test_schemaless_falls_back_to_keys()
