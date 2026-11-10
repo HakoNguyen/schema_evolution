@@ -1,6 +1,7 @@
 import re
 import sys
 import json
+import hashlib
 import time
 import threading
 from pathlib import Path
@@ -63,6 +64,24 @@ def _extract_raw_table(payload: dict, ddl) -> str | None:
     )
 
 
+# registry_key -> fingerprint cấu trúc message gần nhất đã được kiểm tra.
+_seen_fingerprints: dict[str, str] = {}
+
+
+def _schema_fingerprint(data: dict, data_dict) -> str | None:
+    """
+    Dấu vân tay cấu trúc của 1 message dữ liệu. Debezium (schemas.enable=true): hash phần
+    schema của "after" -> đổi khi ADD/DROP/RENAME cột và khi đổi kiểu/precision/độ dài
+    (kèm column.propagate.source.type). Message không có schema (VD Mongo payload): hash tập key.
+    """
+    schema = data.get("schema") if isinstance(data.get("schema"), dict) else None
+    after = next((f for f in (schema or {}).get("fields", []) if f.get("field") == "after"), None)
+    basis = after if after is not None else (sorted(data_dict) if isinstance(data_dict, dict) else None)
+    if basis is None:
+        return None
+    return hashlib.sha1(json.dumps(basis, sort_keys=True).encode()).hexdigest()
+
+
 def _handle_message(message, event_driven_pairs: list[dict], registry: SchemaRegistry, notifier) -> None:
     data = json.loads(message.value.decode('utf-8'))
     payload = data.get("payload", data)
@@ -94,19 +113,28 @@ def _handle_message(message, event_driven_pairs: list[dict], registry: SchemaReg
         print(f"[Kafka Consumer] Bảng '{raw_table}' không thuộc pipeline '{matching_pair['name']}', bỏ qua.")
         return
 
+    # Message dữ liệu mang cấu trúc y hệt lần trước -> schema nguồn không đổi, khỏi crawl.
+    # (Trước đây mọi message đều crawl metadata nguồn: vài chục trade/s = vài chục query catalog/s.)
+    fingerprint = None if ddl else _schema_fingerprint(data, data_dict)
+    keys = [make_registry_key(matching_pair["name"], t) for t in tables]
+    if fingerprint is not None and all(_seen_fingerprints.get(k) == fingerprint for k in keys):
+        return
+
     source_engine = matching_pair["source_engine"]
     target_engine = matching_pair["target_engine"]
     ensure_connected(source_engine)
     if target_engine is not None:
         ensure_connected(target_engine)
 
-    for table_name in tables:
-        registry_key = make_registry_key(matching_pair["name"], table_name)
-        print(f"[Kafka Consumer] {'DDL' if ddl else 'Data payload'} event on '{registry_key}'. Running evolution check...")
+    for table_name, registry_key in zip(tables, keys):
+        print(f"[Kafka Consumer] {'DDL' if ddl else 'Schema fingerprint changed'} on '{registry_key}'. Running evolution check...")
         result = run_evolution_check(
             source_engine, target_engine, table_name, registry, notifier,
             registry_key=registry_key,
         )
+        # Chỉ ghi nhớ sau khi kiểm tra thành công: lỗi giữa chừng -> message sau kiểm tra lại.
+        if fingerprint is not None:
+            _seen_fingerprints[registry_key] = fingerprint
         print(f"[Kafka Consumer] {registry_key}: {result.get('status', 'unknown')}")
         log_detected_change(matching_pair["name"], table_name, result, source="kafka")
 
@@ -152,7 +180,6 @@ def run_consumer_for_cluster(cluster_kafka_config: dict, cluster_pairs: list[dic
             for message in consumer:
                 if message.value is None:
                     continue
-                print(f"[Kafka Consumer - {kafka_bootstrap}] Received event on topic: {message.topic}")
                 try:
                     _handle_message(message, event_driven_pairs, registry, notifier)
                 except Exception as e:

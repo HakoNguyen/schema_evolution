@@ -676,8 +676,9 @@ def _run_evolution_check_unlocked(
         pháp riêng của nó.
 
     Luồng xử lý:
-    1. Nếu registry.is_frozen(table_name) -> return sớm, không làm gì
-       thêm (đang chờ approve trên UI), có thể trả về status="frozen".
+    1. Nếu registry.is_frozen(table_name): nguồn đã khớp lại baseline ->
+       gỡ freeze, status="resolved_at_source"; ngược lại status="frozen"
+       (đang chờ approve trên UI), không làm gì thêm.
     2. current_schema = source_engine.crawl_metadata(table_name)
     3. old_schema = registry.load(table_name)
        - Nếu None (lần đầu crawl bảng này): registry.save(...) luôn,
@@ -698,11 +699,17 @@ def _run_evolution_check_unlocked(
 
     key = registry_key if registry_key is not None else table_name
 
-    if registry.is_frozen(key):
-        return {"status": "frozen", "table": table_name}
-
     current_schema = source_engine.crawl_metadata(table_name)
     old_schema = registry.load(key)
+
+    if registry.is_frozen(key):
+        # Nguồn đã quay về đúng baseline (dev rollback sau Reject, hoặc tự hoàn tác) -> không
+        # còn gì chờ duyệt: gỡ freeze, bỏ draft. Nếu không, bảng bị đóng băng vĩnh viễn với
+        # một draft đã lỗi thời.
+        if old_schema is not None and not compare_schemas(old_schema, current_schema):
+            registry.reject_change(key)
+            return {"status": "resolved_at_source", "table": table_name}
+        return {"status": "frozen", "table": table_name}
 
     if old_schema is None:
         registry.save(key, current_schema)

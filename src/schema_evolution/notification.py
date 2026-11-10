@@ -104,6 +104,8 @@ class TelegramNotifier:
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
 
     def send_message(self, text: str) -> bool:
+        if not self.bot_token or not self.chat_id:
+            return False  # chưa cấu hình Telegram: không gọi API (3 lần 404 chặn luồng xử lý vài giây)
         url = f"{self.base_url}/sendMessage"
         payload = {
             "chat_id": self.chat_id, 

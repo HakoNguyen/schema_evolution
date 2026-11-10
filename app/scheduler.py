@@ -132,9 +132,16 @@ def log_detected_change(pipeline: str, table_name: str, result: dict, source: st
     """Ghi Live Event CHỈ khi có thay đổi thật — "frozen"/"no_change" lặp lại
     mỗi chu kỳ không phải sự kiện mới."""
     status = result.get("status")
-    if status not in ("changes_applied", "breaking_detected"):
+    if status not in ("changes_applied", "breaking_detected", "resolved_at_source"):
         return
     from app.event_log import event_logger
+    if status == "resolved_at_source":
+        event_logger.add_event(
+            pipeline_name=pipeline, table_name=table_name,
+            ddl=f"[{source}] Resolved at source: schema reverted to baseline, table unfrozen",
+            status=status, severity="non_breaking",
+        )
+        return
 
     def describe(changes):
         return ", ".join(

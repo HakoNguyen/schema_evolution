@@ -154,7 +154,8 @@ class ClickHouseEngine(BaseEngine):
         base_type = NORMALIZED_TO_CLICKHOUSE.get(column.data_type, "String")
         if column.data_type == "numeric" and column.precision:
             base_type = f"Decimal({min(column.precision, 76)},{column.scale or 0})"
-        if column.max_length and base_type == "String":
+        # Chỉ char(n) mới là độ dài cố định; varchar(n) -> FixedString sẽ đệm byte 0 vào chuỗi ngắn.
+        if column.max_length and column.data_type == "char":
             base_type = f"FixedString({column.max_length})"
         if column.nullable: 
             return f"Nullable({base_type})"

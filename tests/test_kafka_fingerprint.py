@@ -1,0 +1,54 @@
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from app.kafka_consumer import _schema_fingerprint
+
+
+def _msg(after_fields, after):
+    schema = {"fields": [{"field": "before"}, {"field": "after", "fields": after_fields}, {"field": "source"}]}
+    return {"schema": schema, "payload": {"op": "c", "after": after}}
+
+
+PRICE_18 = {"field": "price", "type": "bytes", "name": "org.apache.kafka.connect.data.Decimal",
+            "parameters": {"scale": "8", "connect.decimal.precision": "18"}}
+PRICE_24 = {**PRICE_18, "parameters": {"scale": "8", "connect.decimal.precision": "24"}}
+ID = {"field": "trade_id", "type": "int64"}
+
+
+def fp(msg):
+    return _schema_fingerprint(msg, msg["payload"]["after"])
+
+
+def test_same_structure_same_fingerprint():
+    # Giá trị khác nhau, cấu trúc như nhau -> không crawl lại.
+    assert fp(_msg([ID, PRICE_18], {"trade_id": 1, "price": "AQ=="})) == fp(_msg([ID, PRICE_18], {"trade_id": 2, "price": "Ag=="}))
+    print("[PASS] test_same_structure_same_fingerprint")
+
+
+def test_ddl_changes_fingerprint():
+    base = fp(_msg([ID, PRICE_18], {}))
+    added = fp(_msg([ID, PRICE_18, {"field": "is_buyer_maker", "type": "boolean", "optional": True}], {}))
+    widened = fp(_msg([ID, PRICE_24], {}))
+    assert len({base, added, widened}) == 3
+    print("[PASS] test_ddl_changes_fingerprint")
+
+
+def test_schemaless_falls_back_to_keys():
+    a = {"payload": {"after": {"x": 1, "y": 2}}}
+    b = {"payload": {"after": {"y": 9, "x": 8}}}
+    c = {"payload": {"after": {"x": 1, "y": 2, "z": 3}}}
+    assert _schema_fingerprint(a, a["payload"]["after"]) == _schema_fingerprint(b, b["payload"]["after"])
+    assert _schema_fingerprint(a, a["payload"]["after"]) != _schema_fingerprint(c, c["payload"]["after"])
+    assert _schema_fingerprint({}, None) is None
+    print("[PASS] test_schemaless_falls_back_to_keys")
+
+
+if __name__ == "__main__":
+    test_same_structure_same_fingerprint()
+    test_ddl_changes_fingerprint()
+    test_schemaless_falls_back_to_keys()
+    print("\nALL FINGERPRINT TESTS PASSED!")
