@@ -46,8 +46,24 @@ def to_row(d: dict) -> dict:
     }
 
 
+def ticker_row(d: dict) -> dict:
+    """Binance 24h miniTicker -> 1 dòng bảng tickers (pipeline 2, UPSERT theo symbol)."""
+    return {
+        "symbol": d["s"],
+        "last_price": Decimal(d["c"]),
+        "open_price": Decimal(d["o"]),
+        "high_price": Decimal(d["h"]),
+        "low_price": Decimal(d["l"]),
+        "base_volume": Decimal(d["v"]),
+        "quote_volume": Decimal(d["q"]),
+        "event_time": datetime.fromtimestamp(d["E"] / 1000, tz=timezone.utc),
+    }
+
+
 class PostgresSink:
-    def __init__(self):
+    def __init__(self, table: str, upsert_key: str | None = None):
+        # upsert_key: None = chỉ INSERT (bỏ qua trùng); "symbol" = UPSERT giữ bản mới nhất.
+        self.table, self.upsert_key = table, upsert_key
         self.conn = None
         self.columns: set[str] = set()
         self.refreshed_at = 0.0
@@ -60,7 +76,7 @@ class PostgresSink:
             cur.execute(
                 "SELECT column_name FROM information_schema.columns "
                 "WHERE table_schema = 'public' AND table_name = %s",
-                (c.SOURCE_TABLE,),
+                (self.table,),
             )
             self.columns = {r[0] for r in cur.fetchall()}
         self.conn.rollback()  # kết thúc transaction đọc, tránh giữ lock catalog khi có ALTER
@@ -72,9 +88,17 @@ class PostgresSink:
             self.refreshed_at = 0
         if time.monotonic() - self.refreshed_at > COLUMN_REFRESH_SECONDS:
             self._refresh_columns()
+        if self.upsert_key:
+            # 1 lệnh UPSERT không được chạm cùng 1 dòng 2 lần -> giữ bản mới nhất của mỗi khoá trong lô.
+            rows = list({r[self.upsert_key]: r for r in rows}.values())
         for attempt in (1, 2):
             cols = [k for k in rows[0] if k in self.columns]
-            sql = f"INSERT INTO {c.SOURCE_TABLE} ({', '.join(cols)}) VALUES %s ON CONFLICT DO NOTHING"
+            if self.upsert_key:
+                updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in cols if k != self.upsert_key)
+                conflict = f"ON CONFLICT ({self.upsert_key}) DO UPDATE SET {updates}"
+            else:
+                conflict = "ON CONFLICT DO NOTHING"
+            sql = f"INSERT INTO {self.table} ({', '.join(cols)}) VALUES %s {conflict}"
             try:
                 with self.conn.cursor() as cur:
                     execute_values(cur, sql, [tuple(r[k] for k in cols) for r in rows], page_size=1000)
@@ -94,7 +118,8 @@ class PostgresSink:
 
 
 async def live_source(queue: asyncio.Queue, symbols: list[str], ws_base: str, record_path: str | None):
-    url = f"{ws_base}/stream?streams=" + "/".join(f"{s}@trade" for s in symbols)
+    streams = [f"{s}@trade" for s in symbols] + [f"{s}@miniTicker" for s in symbols]
+    url = f"{ws_base}/stream?streams=" + "/".join(streams)
     rec = open(record_path, "a", encoding="utf-8", buffering=1) if record_path else None
     try:
         # websockets.connect dùng như async iterator = tự kết nối lại khi rớt mạng.
@@ -104,7 +129,7 @@ async def live_source(queue: asyncio.Queue, symbols: list[str], ws_base: str, re
                 async for msg in ws:
                     d = json.loads(msg)["data"]
                     queue.put_nowait(d)
-                    if rec:
+                    if rec and d.get("e") == "trade":  # file replay chỉ chứa trade
                         rec.write(json.dumps(d) + "\n")
             except websockets.ConnectionClosed as e:
                 print(f"[ingestor] websocket closed ({e}), reconnecting...")
@@ -131,15 +156,31 @@ async def replay_source(queue: asyncio.Queue, path: str, speed: float):
     print("[ingestor] replay xong")
 
 
-async def writer(queue: asyncio.Queue, sink: PostgresSink):
+async def _write_tickers(sink: PostgresSink, rows: list[dict], stats: Counter):
+    try:
+        stats["tickers"] += await asyncio.to_thread(sink.write, rows)
+    except psycopg2.Error as e:
+        stats["ticker_failed"] += len(rows)
+        print(f"[ingestor] UPSERT tickers lỗi, bỏ {len(rows)} dòng: {type(e).__name__}: {str(e).strip()[:200]}")
+        if sink.conn is not None and sink.conn.closed:
+            sink.conn = None
+
+
+async def writer(queue: asyncio.Queue, sink: PostgresSink, ticker_sink: PostgresSink):
     stats = Counter()
     last_price: dict[str, Decimal] = {}
     last_report = time.monotonic()
     while True:
         await asyncio.sleep(0.25)
-        batch = []
+        batch, tickers = [], []
         while not queue.empty() and len(batch) < 2000:
-            batch.append(to_row(queue.get_nowait()))
+            d = queue.get_nowait()
+            if d.get("e") == "24hrMiniTicker":
+                tickers.append(ticker_row(d))
+            else:
+                batch.append(to_row(d))
+        if tickers:
+            await _write_tickers(ticker_sink, tickers, stats)
         if batch:
             stats["received"] += len(batch)
             try:
@@ -157,7 +198,7 @@ async def writer(queue: asyncio.Queue, sink: PostgresSink):
             rate = stats["inserted"] / (now - last_report)
             prices = "  ".join(f"{s} {p.normalize():f}" for s, p in sorted(last_price.items()))
             print(f"[ingestor] {rate:6.1f} trade/s | inserted {stats['inserted']} "
-                  f"(failed {stats['failed']}) | {prices}")
+                  f"(failed {stats['failed']}) | ticker upserts {stats['tickers']} | {prices}")
             stats.clear()
             last_report = now
 
@@ -172,14 +213,15 @@ async def main():
     args = ap.parse_args()
 
     queue: asyncio.Queue = asyncio.Queue()
-    sink = PostgresSink()
+    sink = PostgresSink(c.SOURCE_TABLE)
+    ticker_sink = PostgresSink("tickers", upsert_key="symbol")
     if args.replay:
         source = replay_source(queue, args.replay, args.speed)
     else:
         if args.record:
             Path(args.record).parent.mkdir(parents=True, exist_ok=True)
         source = live_source(queue, args.symbols.lower().split(","), args.ws.rstrip("/"), args.record)
-    await asyncio.gather(source, writer(queue, sink))
+    await asyncio.gather(source, writer(queue, sink, ticker_sink))
 
 
 if __name__ == "__main__":

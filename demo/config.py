@@ -36,3 +36,7 @@ SOURCE_TABLE = "trades"
 PIPELINE_NAME = "market_trades"
 REGISTRY_KEY = f"{PIPELINE_NAME}/{SOURCE_TABLE}"
 REGISTRY_DIR = "data/registry"  # khớp registry.dir trong config/main.yaml
+
+# Pipeline 2 (chạy song song với market_trades): cùng DB nguồn, cùng Debezium connector, khác bảng.
+TICKERS_PIPELINE = "market_tickers"
+TICKERS_TABLE = "tickers"

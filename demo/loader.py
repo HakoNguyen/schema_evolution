@@ -3,6 +3,9 @@ Loader (data plane): topic CDC Debezium -> ClickHouse.
 
     python -m demo.loader           # pipeline có engine bảo vệ -> analytics.trades
     python -m demo.loader --naive   # pipeline đối chứng, không có engine -> analytics_naive.trades
+    python -m demo.loader --pipeline market_tickers --table tickers --time-column event_time
+
+Dùng chung cho mọi bảng/pipeline (tham số), chỉ giao tiếp với engine qua Gate + Reporting API.
 
 Đảm bảo không mất dữ liệu (chế độ thường):
 - Chỉ commit offset Kafka SAU khi đã ghi ClickHouse thành công (at-least-once;
@@ -38,11 +41,11 @@ RATE_WINDOW_SECONDS = 5
 class Reporter:
     """Báo trạng thái lên engine qua Reporting API (POST /api/pipelines/{p}/components/{name})."""
 
-    def __init__(self, name: str, role: str, database: str):
-        self.url = f"{c.ENGINE_API}/api/pipelines/{c.PIPELINE_NAME}/components/{name}"
+    def __init__(self, pipeline: str, table: str, name: str, role: str, database: str):
+        self.url = f"{c.ENGINE_API}/api/pipelines/{pipeline}/components/{name}"
         self.role = role
         self.state, self.message = "starting", ""
-        self.metrics = {"target_table": f"{database}.{c.SOURCE_TABLE}"}
+        self.metrics = {"target_table": f"{database}.{table}"}
         self.sent_at = 0.0
         self.session = requests.Session()
 
@@ -181,8 +184,9 @@ class ClickHouseTable:
 class FreezeGate:
     """Hỏi engine qua Gate API (GET /api/gate/{pipeline}/{table}) bảng có đang bị freeze không."""
 
-    def __init__(self, status: Reporter):
-        self.url = f"{c.ENGINE_API}/api/gate/{c.PIPELINE_NAME}/{c.SOURCE_TABLE}"
+    def __init__(self, pipeline: str, table: str, status: Reporter):
+        self.key = f"{pipeline}/{table}"
+        self.url = f"{c.ENGINE_API}/api/gate/{pipeline}/{table}"
         self.session = requests.Session()
         self.frozen = False
         self.renames: dict[str, str] = {}  # RENAME đã duyệt: tên cũ -> tên mới
@@ -215,35 +219,48 @@ class FreezeGate:
             self.status.update("paused", message="table frozen: breaking change awaiting approval — data kept in Kafka",
                                rows_per_sec=0.0)
             if time.monotonic() >= next_log:
-                print(f"[loader] PAUSE: bảng {c.REGISTRY_KEY} đang bị freeze (thay đổi breaking chờ duyệt) "
+                print(f"[loader] PAUSE: bảng {self.key} đang bị freeze (thay đổi breaking chờ duyệt) "
                       f"-> dừng ghi, dữ liệu giữ trong Kafka ({time.monotonic() - started:.0f}s)")
                 next_log += 5
             time.sleep(1)
         print(f"[loader] RESUME: bảng đã được mở lại sau {time.monotonic() - started:.1f}s")
 
 
+def loader_group(table: str, naive: bool = False) -> str:
+    """Consumer group của loader cho bảng (trades giữ tên cũ để offset đã commit không bị bỏ)."""
+    base = c.LOADER_NAIVE_GROUP if naive else c.LOADER_GROUP
+    return base if table == c.SOURCE_TABLE else f"{base}-{table}"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--naive", action="store_true", help="pipeline đối chứng: không có engine bảo vệ")
-    naive = ap.parse_args().naive
+    ap.add_argument("--pipeline", default=c.PIPELINE_NAME, help="tên pipeline trong engine (Gate/Reporting API)")
+    ap.add_argument("--table", default=c.SOURCE_TABLE, help="bảng nguồn = bảng đích trong ClickHouse")
+    ap.add_argument("--topic", help="topic CDC (mặc định market.public.<table>)")
+    ap.add_argument("--time-column", default="trade_time", help="cột thời gian sự kiện để tính độ trễ")
+    args = ap.parse_args()
+    naive, time_col = args.naive, args.time_column
+    topic = args.topic or f"market.public.{args.table}"
     database = c.CH_NAIVE_DATABASE if naive else c.CH_DATABASE
     name = "naive-loader" if naive else "loader"
+    group = loader_group(args.table, naive)
 
-    status = Reporter(name, "baseline sink (no engine)" if naive else "warehouse sink", database)
+    status = Reporter(args.pipeline, args.table, name, "baseline sink (no engine)" if naive else "warehouse sink", database)
     client = clickhouse_connect.get_client(**c.CH, database=database)
-    gate = None if naive else FreezeGate(status)
-    table = ClickHouseTable(client, c.SOURCE_TABLE, status, gate)
+    gate = None if naive else FreezeGate(args.pipeline, args.table, status)
+    table = ClickHouseTable(client, args.table, status, gate)
     consumer = KafkaConsumer(
-        c.TOPIC,
+        topic,
         bootstrap_servers=c.KAFKA_BOOTSTRAP,
-        group_id=c.LOADER_NAIVE_GROUP if naive else c.LOADER_GROUP,
+        group_id=group,
         enable_auto_commit=False,
         auto_offset_reset="earliest",
         max_poll_records=5000,
         max_poll_interval_ms=3_600_000,  # PAUSE/HOLD trong lúc chờ duyệt có thể kéo dài nhiều phút
         metadata_max_age_ms=5000,  # topic CDC chỉ được tạo khi có message đầu tiên; mặc định 5 phút mới thấy
     )
-    print(f"[{name}] {c.TOPIC} -> clickhouse {database}.{c.SOURCE_TABLE}")
+    print(f"[{name}] {topic} -> clickhouse {database}.{args.table} (pipeline {args.pipeline})")
 
     loaded, last_report, last_lag = 0, time.monotonic(), None
     window: deque[tuple[float, int]] = deque()  # (thời điểm ghi xong, số dòng) trong RATE_WINDOW_SECONDS
@@ -265,7 +282,7 @@ def main():
                 table.write(rows)
             loaded += len(rows)
             window.append((time.monotonic(), len(rows)))
-            tt = max((r["trade_time"] for r in rows if isinstance(r.get("trade_time"), datetime)), default=None)
+            tt = max((r[time_col] for r in rows if isinstance(r.get(time_col), datetime)), default=None)
             if tt:
                 last_lag = (datetime.now(timezone.utc) - tt).total_seconds()
         if polled:

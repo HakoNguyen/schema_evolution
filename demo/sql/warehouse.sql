@@ -12,3 +12,16 @@ CREATE TABLE IF NOT EXISTS {db}.trades (
     ingested_at  DateTime64(6, 'UTC')  -- micro giây như Postgres: check.py dùng làm mốc đối chiếu chính xác
 ) ENGINE = ReplacingMergeTree
 ORDER BY (symbol, trade_id);
+
+-- Pipeline 2 (market_tickers): bản mới nhất theo symbol (ReplacingMergeTree giữ event_time lớn nhất).
+CREATE TABLE IF NOT EXISTS {db}.tickers (
+    symbol        String,
+    last_price    Nullable(Decimal(24,8)),
+    open_price    Nullable(Decimal(24,8)),
+    high_price    Nullable(Decimal(24,8)),
+    low_price     Nullable(Decimal(24,8)),
+    base_volume   Nullable(Decimal(28,8)),
+    quote_volume  Nullable(Decimal(28,8)),
+    event_time    DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(event_time)
+ORDER BY symbol;

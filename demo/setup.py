@@ -1,5 +1,5 @@
 """
-Dựng (hoặc dựng lại) toàn bộ luồng demo market_trades.
+Dựng (hoặc dựng lại) toàn bộ luồng demo: market_trades + market_tickers.
 
     python -m demo.setup           # tạo nếu chưa có (chạy lại nhiều lần không sao)
     python -m demo.setup --reset   # xóa sạch dữ liệu demo rồi tạo lại schema v1
@@ -71,22 +71,23 @@ def reset() -> None:
     print("[reset] kafka: topic + consumer group")
     admin = KafkaAdminClient(bootstrap_servers=c.KAFKA_BOOTSTRAP)
     try:
-        admin.delete_topics([c.TOPIC])
+        admin.delete_topics([c.TOPIC, f"market.public.{c.TICKERS_TABLE}"])
     except UnknownTopicOrPartitionError:
         pass
     # kafka-python 3.x: delete_groups (2.x là delete_consumer_groups). Nhóm chưa tồn tại -> bỏ qua.
     existing = {g["group_id"] for g in admin.list_groups()}
-    groups = [g for g in (c.LOADER_GROUP, c.LOADER_NAIVE_GROUP) if g in existing]
+    groups = [g for g in (c.LOADER_GROUP, c.LOADER_NAIVE_GROUP, f"{c.LOADER_GROUP}-{c.TICKERS_TABLE}") if g in existing]
     if groups:
         admin.delete_groups(groups)
     admin.close()
 
     print("[reset] registry")
-    shutil.rmtree(ROOT / "data" / "registry" / c.PIPELINE_NAME, ignore_errors=True)
+    for pipeline in (c.PIPELINE_NAME, c.TICKERS_PIPELINE):
+        shutil.rmtree(ROOT / "data" / "registry" / pipeline, ignore_errors=True)
 
 
 def setup() -> None:
-    print("[setup] postgres: DB exchange + bảng trades")
+    print("[setup] postgres: DB exchange + bảng trades, tickers")
     with _pg_admin() as cur:
         cur.execute("SELECT 1 FROM pg_database WHERE datname = 'exchange'")
         if cur.fetchone() is None:
@@ -95,7 +96,7 @@ def setup() -> None:
         for stmt in _sql_statements(HERE / "sql" / "source.sql"):
             cur.execute(stmt)
 
-    print(f"[setup] clickhouse: {c.CH_DATABASE}.trades + {c.CH_NAIVE_DATABASE}.trades (đối chứng)")
+    print(f"[setup] clickhouse: {c.CH_DATABASE} + {c.CH_NAIVE_DATABASE} (đối chứng)")
     ch = clickhouse_connect.get_client(**c.CH)
     for db in (c.CH_DATABASE, c.CH_NAIVE_DATABASE):
         for stmt in _sql_statements(HERE / "sql" / "warehouse.sql", db=db):

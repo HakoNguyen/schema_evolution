@@ -27,6 +27,10 @@ Binance WebSocket ──► ingestor ──► Postgres  exchange.public.trades 
 
                                   Redpanda ──► loader --naive ──► ClickHouse analytics_naive.trades
                                   (đối chứng: sink thông thường, không có engine -> vỡ khi có ADD COLUMN)
+
+Pipeline 2 chạy song song (market_tickers), dùng chung Postgres, connector và topic prefix:
+Binance miniTicker ──► ingestor ──► exchange.public.tickers (UPSERT theo symbol)
+                   ──► topic market.public.tickers ──► loader --pipeline market_tickers ──► analytics.tickers
 ```
 
 | File | Vai trò |
@@ -46,7 +50,8 @@ Binance WebSocket ──► ingestor ──► Postgres  exchange.public.trades 
 | Gate API `GET /api/gate/market_trades/trades` | Loader hỏi engine bảng đang `open` hay `frozen` (kèm `column_renames`) trước khi ghi |
 | Reporting API `POST /api/pipelines/market_trades/components/<tên>` | `loader`, `naive-loader`, `reconciler` (`check --report`) tự báo trạng thái + chỉ số để hiện trên UI |
 | [`../frontend/src/components/PipelinesOverview.jsx`](../frontend/src/components/PipelinesOverview.jsx) | Trang **Pipelines Overview**: mọi pipeline + thành phần tự báo cáo, là màn hình chính của buổi demo |
-| [`../config/pipelines/market_trades.yaml`](../config/pipelines/market_trades.yaml) | Khai báo pipeline cho engine |
+| [`../config/pipelines/market_trades.yaml`](../config/pipelines/market_trades.yaml) | Khai báo pipeline 1 cho engine |
+| [`../config/pipelines/market_tickers.yaml`](../config/pipelines/market_tickers.yaml) | Khai báo pipeline 2 (bảng `tickers`), xem [Nhiều pipeline song song](#nhiều-pipeline-song-song) |
 
 ---
 
@@ -59,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File demo\start.ps1 -Reset
 # mất mạng: thêm  -Replay demo\recordings\binance_trades.jsonl
 ```
 
-Script này bật hạ tầng, reset về schema v1, rồi mở 6 cửa sổ: backend, frontend, ingestor, loader, naive-loader và check. **Backend được bật trước** để consumer group của engine ổn định trước khi dữ liệu chảy vào. Sau đó **chờ khoảng 60 giây** rồi mới mở http://localhost:5173.
+Script này bật hạ tầng, reset về schema v1, rồi mở 7 cửa sổ: backend, frontend, ingestor, loader, naive-loader, tickers-loader và check. **Backend được bật trước** để consumer group của engine ổn định trước khi dữ liệu chảy vào. Sau đó **chờ khoảng 60 giây** rồi mới mở http://localhost:5173.
 
 **Cách thủ công:** mọi lệnh chạy từ thư mục gốc repo, với venv đã kích hoạt (`.\venv\Scripts\Activate.ps1`). Cài thư viện bằng `pip install -r requirements.txt`. **Bắt buộc phải có `crc32c`**, xem phần [Kết quả phase 4](#kết-quả-phase-4-đo-đạc-và-tập-dượt).
 
@@ -77,6 +82,7 @@ cd frontend; npm run dev                 # UI tại http://localhost:5173
 python -m demo.ingestor                  # trade thật -> Postgres
 python -m demo.loader                    # Kafka -> ClickHouse (có engine bảo vệ)
 python -m demo.loader --naive            # pipeline đối chứng (không có engine)
+python -m demo.loader --pipeline market_tickers --table tickers --time-column event_time   # pipeline 2
 python -m demo.check --watch --report    # đối chiếu mỗi 2s, báo lên engine (hiện trên UI)
 ```
 
@@ -270,6 +276,22 @@ Một thành phần im lặng quá 15 giây sẽ bị coi là `stale` (riêng `f
 
 ---
 
+## Nhiều pipeline song song
+
+Engine không biết gì về "demo trades": mọi pipeline là một file trong `config/pipelines/`. Pipeline 2 `market_tickers` chỉ là thêm **một file YAML** (backend đang chạy tự nạp sau khoảng 3 giây), cùng **cùng một chương trình loader** chạy với tham số khác. Không sửa dòng code nào của engine.
+
+- Hai pipeline dùng chung topic prefix `market`. Engine chỉ mở **một Kafka consumer cho mỗi cụm** rồi chia message cho mọi pipeline có khai báo bảng đó.
+- Mỗi pipeline có registry, trạng thái freeze, lịch quét và component riêng. Freeze pipeline này không chặn pipeline kia.
+
+Đã kiểm chứng (10/11/2026, dữ liệu live khoảng 200 trade/giây + 6 ticker/giây):
+
+| Bước | Kết quả |
+|---|---|
+| `python -m demo.scenario tickers_drop` (xóa cột `low_price`) | `market_tickers/tickers` freeze sau **2,0 giây**, loader tickers PAUSE. `market_trades/trades` vẫn `open`, loader trades vẫn chạy khoảng 300 dòng/giây, đối chiếu vẫn **KHỚP, mất 0 dòng** |
+| `python -m demo.scenario tickers_restore` (thêm lại cột) | Nguồn khớp baseline, engine tự gỡ freeze sau **2,0 giây**, loader tickers RESUME và xử lý hết phần tồn trong Kafka |
+
+---
+
 ## Xử lý sự cố
 
 | Triệu chứng | Cách xử lý |
@@ -280,6 +302,7 @@ Một thành phần im lặng quá 15 giây sẽ bị coi là `stale` (riêng `f
 | Engine phản ứng chậm (khoảng 30 giây) ngay sau khi khởi động lại backend | Consumer group đang chờ timeout của consumer cũ. Đợi khoảng 30 giây, hoặc khởi động backend sớm trước buổi demo |
 | Pipeline đối chứng đã `FAILED` | Đó là kịch bản. Muốn chạy lại từ đầu thì dùng `--reset` |
 | Ingestor không kết nối được | Thử `--ws wss://stream.binance.com:9443`, hoặc dùng `--replay` |
+| Chạy `--replay` thì tickers-loader đứng 0 dòng/giây | File replay chỉ chứa trade, không có miniTicker. Pipeline 2 chỉ có dữ liệu khi chạy live |
 | `UnicodeEncodeError` trên console Windows | Package `demo` đã tự chuyển stdout sang UTF-8. Nếu chạy script ngoài package, đặt `PYTHONIOENCODING=utf-8` |
 | Postgres phình WAL | Replication slot bị bỏ lại khi connector đã xóa: `--reset` sẽ xóa slot |
 
@@ -305,6 +328,7 @@ Trước buổi demo: chạy `--reset`, khởi động 4 tiến trình cùng UI,
 | 3 | `python -m demo.scenario rename` | Làn chính "Tạm dừng: chờ duyệt". Bấm **Review & Approve**, chạy sandbox, Approve, quay lại Data Flow: loader xử lý phần tồn |
 | 4 | `python -m demo.scenario narrow` | Thu hẹp kiểu bị bắt sau khoảng 1 giây, loader PAUSE |
 | 5 | `python -m demo.scenario rollback` | Engine tự gỡ freeze, loader chạy tiếp |
+| 5b | `python -m demo.scenario tickers_drop`, rồi `tickers_restore` | **Chỉ** `market_tickers` bị freeze, `market_trades` vẫn Healthy. Sau khi thêm lại cột, engine tự gỡ freeze |
 | 6 | `python -m demo.check` | **KHỚP, mất 0 dòng.** Pipeline đối chứng: thiếu hàng nghìn dòng |
 
 Với bước 4, nếu muốn trình diễn nút Reject trên UI, hãy chạy `rollback` **ngay sau** khi Reject (trong vòng 60 giây).

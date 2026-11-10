@@ -8,3 +8,15 @@ CREATE TABLE IF NOT EXISTS trades (
     ingested_at  TIMESTAMPTZ   NOT NULL DEFAULT now(),
     PRIMARY KEY (symbol, trade_id)
 );
+
+-- Pipeline 2 (market_tickers): thống kê 24h của từng coin, cập nhật liên tục (UPSERT theo symbol).
+CREATE TABLE IF NOT EXISTS tickers (
+    symbol        VARCHAR(20)   PRIMARY KEY,
+    last_price    NUMERIC(24,8),
+    open_price    NUMERIC(24,8),
+    high_price    NUMERIC(24,8),
+    low_price     NUMERIC(24,8),
+    base_volume   NUMERIC(28,8),
+    quote_volume  NUMERIC(28,8),
+    event_time    TIMESTAMPTZ   NOT NULL
+);

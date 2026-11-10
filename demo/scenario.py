@@ -6,6 +6,8 @@ Các bước kịch bản demo: chạy DDL trên nguồn (vai dev) và đo thờ
     python -m demo.scenario rename        # breaking     -> freeze, chờ duyệt
     python -m demo.scenario narrow        # breaking     -> freeze, chờ duyệt
     python -m demo.scenario rollback      # dev hoàn tác narrow -> engine tự gỡ freeze
+    python -m demo.scenario tickers_drop     # pipeline 2: breaking -> CHỈ market_tickers bị freeze
+    python -m demo.scenario tickers_restore  # dev thêm lại cột -> engine tự gỡ freeze market_tickers
 
 Thời gian đo = từ lúc ALTER commit trên Postgres đến lúc warehouse có schema mới
 (non-breaking) hoặc registry chuyển sang frozen (breaking).
@@ -48,13 +50,24 @@ STEPS = {
         expect="clear",
         story="Dev rollback thay đổi nguy hiểm trên nguồn -> engine thấy nguồn khớp baseline, tự gỡ freeze",
     ),
+    # Pipeline 2 chạy song song: freeze market_tickers không được làm dừng market_trades.
+    "tickers_drop": dict(
+        sql="ALTER TABLE tickers DROP COLUMN low_price",
+        expect="frozen", pipeline=c.TICKERS_PIPELINE, table=c.TICKERS_TABLE,
+        story="Pipeline 2: ai đó xóa cột low_price của tickers -> chỉ market_tickers bị freeze, trades vẫn chạy",
+    ),
+    "tickers_restore": dict(
+        sql="ALTER TABLE tickers ADD COLUMN low_price NUMERIC(24,8)",
+        expect="clear", pipeline=c.TICKERS_PIPELINE, table=c.TICKERS_TABLE,
+        story="Dev thêm lại low_price -> nguồn khớp baseline, engine tự gỡ freeze market_tickers",
+    ),
 }
 
 
-def _target_type(ch, column: str) -> str | None:
+def _target_type(ch, table: str, column: str) -> str | None:
     rows = ch.query(
         "SELECT type FROM system.columns WHERE database = %(d)s AND table = %(t)s AND name = %(n)s",
-        parameters={"d": c.CH_DATABASE, "t": c.SOURCE_TABLE, "n": column},
+        parameters={"d": c.CH_DATABASE, "t": table, "n": column},
     ).result_rows
     return rows[0][0] if rows else None
 
@@ -63,10 +76,10 @@ def run(step: str, timeout: float) -> float | None:
     return run_step(step, STEPS[step], timeout)
 
 
-def _gate(session: requests.Session) -> dict | None:
+def _gate(session: requests.Session, pipeline: str, table: str) -> dict | None:
     """Trạng thái bảng qua Gate API của engine (None nếu engine tạm không trả lời)."""
     try:
-        resp = session.get(f"{c.ENGINE_API}/api/gate/{c.PIPELINE_NAME}/{c.SOURCE_TABLE}", timeout=2)
+        resp = session.get(f"{c.ENGINE_API}/api/gate/{pipeline}/{table}", timeout=2)
         resp.raise_for_status()
         return resp.json()
     except (requests.RequestException, ValueError):
@@ -78,6 +91,7 @@ def run_step(step: str, s: dict, timeout: float) -> float | None:
     print(f"\n▶ {step}: {s['story']}\n  SQL: {s['sql']}")
     ch = clickhouse_connect.get_client(**c.CH)
     session = requests.Session()
+    pipeline, table = s.get("pipeline", c.PIPELINE_NAME), s.get("table", c.SOURCE_TABLE)
 
     pg = psycopg2.connect(**c.PG)
     pg.autocommit = True
@@ -89,12 +103,12 @@ def run_step(step: str, s: dict, timeout: float) -> float | None:
 
     while time.monotonic() - t0 < timeout:
         if s["expect"] == "target":
-            typ = _target_type(ch, s["column"])
+            typ = _target_type(ch, table, s["column"])
             if typ and s.get("type_contains", "") in typ:
                 dt = time.monotonic() - t0
                 print(f"  ✓ NON-BREAKING: warehouse tự đồng bộ ({s['column']} {typ}) sau {dt:.2f}s, luồng dữ liệu không dừng")
                 return dt
-        elif (gate := _gate(session)) is not None:
+        elif (gate := _gate(session, pipeline, table)) is not None:
             if s["expect"] == "clear" and gate["state"] == "open":
                 dt = time.monotonic() - t0
                 print(f"  ✓ nguồn đã khớp baseline, engine gỡ freeze sau {dt:.2f}s, loader chạy tiếp")
@@ -102,7 +116,7 @@ def run_step(step: str, s: dict, timeout: float) -> float | None:
             if s["expect"] == "frozen" and gate["state"] == "frozen":
                 dt = time.monotonic() - t0
                 changes = ", ".join(f"{x['change_type']}({x['column']})" for x in gate["pending_changes"])
-                print(f"  ⛔ BREAKING: bảng bị freeze sau {dt:.2f}s [{changes}] -> loader tạm dừng, chờ duyệt trên UI")
+                print(f"  ⛔ BREAKING: {pipeline}/{table} bị freeze sau {dt:.2f}s [{changes}] -> loader tạm dừng, chờ duyệt trên UI")
                 return dt
         time.sleep(0.1)
     print(f"  ✗ engine chưa phản ứng sau {timeout:.0f}s (backend có đang chạy không?)")
