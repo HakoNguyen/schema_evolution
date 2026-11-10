@@ -174,6 +174,8 @@ schema-evolution-core/
 
 ## 🛠️ Quick Start Guide
 
+> **Live demo with real-time market data** (Binance → Postgres → Debezium → ClickHouse): see [demo/README.md](demo/README.md).
+
 ### Prerequisites
 - **Docker Desktop** (with Docker Compose)
 - **Python 3.11+**

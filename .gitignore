@@ -46,3 +46,6 @@ bytebase_demo/
 kafkaconnect_demo/
 docs/*.md
 Dockerfile
+
+# Demo: file ghi lại trade để replay (lớn, tạo lại được)
+demo/recordings/
