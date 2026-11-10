@@ -708,6 +708,8 @@ def _run_evolution_check_unlocked(
         # một draft đã lỗi thời.
         if old_schema is not None and not compare_schemas(old_schema, current_schema):
             registry.reject_change(key)
+            if notifier is not None:
+                notifier.notify_resolved_at_source(table_name, pair_name=_extract_pair_name(key))
             return {"status": "resolved_at_source", "table": table_name}
         return {"status": "frozen", "table": table_name}
 
