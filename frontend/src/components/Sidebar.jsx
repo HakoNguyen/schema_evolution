@@ -6,7 +6,7 @@ export default function Sidebar({ activePage, setActivePage }) {
   const { t } = useLanguage();
 
   const menuItems = [
-    { id: 'data_flow', label: t('data_flow'), icon: <Activity size={18} /> },
+    { id: 'data_flow', label: t('overview'), icon: <Activity size={18} /> },
     { id: 'monitored_tables', label: t('monitored_tables'), icon: <Database size={18} /> },
     { id: 'pipeline_topology', label: t('pipeline_topology'), icon: <Network size={18} /> },
     { id: 'live_events', label: t('live_cdc_stream'), icon: <Zap size={18} /> },

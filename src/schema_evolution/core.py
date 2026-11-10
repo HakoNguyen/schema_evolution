@@ -163,6 +163,7 @@ class SchemaRegistry:
             "is_frozen": current_frozen,
             "version": new_version,
             "updated_at": datetime.now().isoformat(),
+            "column_renames": self.column_renames(table_name),  # giữ qua mọi version
         }
         path = self._path(table_name)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,6 +171,28 @@ class SchemaRegistry:
             json.dump(data, f, ensure_ascii=False, indent=2)
         with open(self._history_path(table_name, new_version), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def column_renames(self, table_name: str) -> dict[str, str]:
+        """Tên cột cũ -> tên hiện tại, từ các RENAME đã được duyệt (Gate API trả cho data plane)."""
+        return dict((self._read_raw(table_name) or {}).get("column_renames") or {})
+
+    def record_renames(self, table_name: str, renames: dict[str, str]) -> None:
+        """
+        Ghi nhận RENAME đã duyệt. Message cũ còn trong Kafka vẫn mang tên cột cũ: data plane cần
+        ánh xạ này để ghi đúng cột sau khi warehouse đã đổi tên. Nối chuỗi: a->b rồi b->c => a->c.
+        """
+        raw = self._read_raw(table_name)
+        if raw is None or not renames:
+            return
+        mapping = dict(raw.get("column_renames") or {})
+        for old, new in renames.items():
+            for k, v in list(mapping.items()):
+                if v == old:
+                    mapping[k] = new
+            mapping[old] = new
+        raw["column_renames"] = {k: v for k, v in mapping.items() if k != v}
+        with open(self._path(table_name), "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False, indent=2)
 
     def is_frozen(self, table_name: str) -> bool:
         raw = self._read_raw(table_name)
@@ -842,6 +865,11 @@ def _approve_change_and_sync_unlocked(
             "errors": errors,
         }
 
+    # Ghi ánh xạ đổi tên TRƯỚC khi gỡ freeze: data plane thấy bảng mở là đã có ánh xạ.
+    registry.record_renames(key, {
+        c.column_name: c.new_value.name for c in all_changes
+        if c.change_type == ChangeType.RENAME_COLUMN and c.new_value is not None
+    })
     registry.approve_change(key)
 
     return {

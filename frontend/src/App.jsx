@@ -7,7 +7,7 @@ import EditSchema from './components/EditSchema';
 import PipelineTopology from './components/PipelineTopology';
 import LiveEventStream from './components/LiveEventStream';
 import PipelineConfig from './components/PipelineConfig';
-import DataFlow from './components/DataFlow';
+import PipelinesOverview from './components/PipelinesOverview';
 import { useToast } from './components/NotificationToast';
 import { useLanguage } from './context/LanguageContext';
 import { Languages, Sun, Moon, ArrowLeft } from 'lucide-react';
@@ -87,7 +87,7 @@ function App() {
           <div className="header-breadcrumbs">
             <span>{t('clusters')}</span> / 
             {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> {t('monitored_tables')}</span>}
-            {activePage === 'data_flow' && <span className="highlight"> {t('data_flow')}</span>}
+            {activePage === 'data_flow' && <span className="highlight"> {t('overview')}</span>}
             {activePage === 'pipeline_topology' && <span className="highlight"> {t('pipeline_topology')}</span>}
             {activePage === 'live_events' && <span className="highlight"> {t('live_cdc_stream')}</span>}
             {activePage === 'pipeline_config' && <span className="highlight"> {t('pipeline_config')}</span>}
@@ -116,9 +116,9 @@ function App() {
         </header>
 
         <div className="content-scroll">
-          {/* PAGE: Live Data Flow (demo pipeline) */}
+          {/* PAGE: Pipelines Overview (mọi pipeline, mọi thành phần tự báo cáo) */}
           {activePage === 'data_flow' && (
-            <DataFlow onReview={(key) => { setActivePage('monitored_tables'); setSelectedKey(key); setRefreshTrigger(p => p + 1); }} />
+            <PipelinesOverview onReview={(key) => { setActivePage('monitored_tables'); setSelectedKey(key); setRefreshTrigger(p => p + 1); }} />
           )}
 
           {/* PAGE: Pipeline Topology */}

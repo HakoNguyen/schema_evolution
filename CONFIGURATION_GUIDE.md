@@ -176,3 +176,30 @@ Engine tự chạy cùng API server (`uvicorn api.main:app --port 8000`). Muốn
 ```powershell
 python -m app.scheduler   # PipelineManager: quét định kỳ + Kafka consumer cho mọi pipeline
 ```
+
+---
+
+## 4. Tích hợp data plane (loader, Kafka Connect, Spark job...)
+
+Engine chỉ quản lý **schema** (control plane). Thành phần ghi dữ liệu (data plane) do bạn tự chọn, và giao tiếp với engine qua 2 API. Engine không cần biết bên trong các thành phần đó.
+
+### Gate API: được ghi hay phải dừng?
+```http
+GET /api/gate/{pipeline}/{table}
+→ {"state": "open" | "frozen", "schema_version": 3,
+   "pending_changes": [{"change_type": "rename_column", "column": "qty"}],
+   "column_renames": {"qty": "quantity"}}
+```
+- `frozen`: có thay đổi breaking đang chờ duyệt. **Dừng ghi** bảng đó (giữ dữ liệu trong hàng đợi, không commit offset) cho tới khi trạng thái trở về `open`.
+- `column_renames`: các lần đổi tên đã duyệt. Message cũ còn trong hàng đợi vẫn mang tên cột cũ, nên phải ghi vào cột tên mới.
+- Không gọi được API thì nên **giữ trạng thái đã biết gần nhất** (fail-static).
+
+### Reporting API: báo trạng thái để hiện trên UI (không bắt buộc)
+```http
+POST /api/pipelines/{pipeline}/components/{name}
+{"state": "running", "role": "warehouse sink",
+ "metrics": {"rows_per_sec": 512.3, "lag_seconds": 1.6}, "message": ""}
+```
+- `state` gợi ý: `running` / `ok` (xanh), `hold` / `paused` (vàng), `failed` / `error` (đỏ). Thành phần im lặng quá 15 giây sẽ hiện là `stale`.
+- `metrics`: tối đa 30 giá trị đơn (số, chuỗi, bool). Trang **Pipelines Overview** hiển thị nguyên các giá trị này; chỉ số `rows_per_sec` có thêm sparkline.
+- Ví dụ hoàn chỉnh: [`demo/loader.py`](demo/loader.py) (`Reporter`, `FreezeGate`) và [`demo/check.py`](demo/check.py) (`report`).

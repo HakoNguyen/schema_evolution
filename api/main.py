@@ -78,14 +78,77 @@ def build_target_engine(pair_config: dict):
     engine.connect()
     return engine
 
-@app.get("/api/flow")
-def get_data_flow():
-    """Số liệu luồng dữ liệu của pipeline demo (demo/): đối chiếu, giá mới nhất, trạng thái loader."""
-    try:
-        from demo.check import flow_snapshot
-        return {"available": True, **flow_snapshot()}
-    except Exception as e:
-        return {"available": False, "error": f"{type(e).__name__}: {e}"}
+# ==============================================================================
+# INTEGRATION CONTRACT cho data plane (loader, Kafka Connect, Spark job...):
+#   Gate API      — hỏi bảng có đang bị freeze không trước khi ghi
+#   Reporting API — tự báo trạng thái + chỉ số tuỳ ý để hiển thị trên UI
+# Engine không biết gì về bên trong các thành phần này.
+# ==============================================================================
+
+COMPONENT_NAME_RE = PIPELINE_NAME_RE
+
+
+def _monitored_pipeline(pipeline: str) -> dict:
+    pair = next((p for p in load_config().get("pairs", []) if p["name"] == pipeline), None)
+    if pair is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline '{pipeline}' is not monitored")
+    return pair
+
+
+@app.get("/api/gate/{pipeline}/{table}")
+def get_gate(pipeline: str, table: str):
+    """open = được ghi; frozen = có thay đổi breaking chờ duyệt -> thành phần ghi dữ liệu phải dừng."""
+    if table not in _monitored_pipeline(pipeline)["tables"]:
+        raise HTTPException(status_code=404, detail=f"Table '{table}' is not monitored in '{pipeline}'")
+    registry = get_registry(load_config())
+    key = f"{pipeline}/{table}"
+    frozen = registry.is_frozen(key)
+    draft = registry.load_draft(key) if frozen else None
+    return {
+        "pipeline": pipeline,
+        "table": table,
+        "state": "frozen" if frozen else "open",
+        "schema_version": registry.get_version(key),
+        "pending_changes": [
+            {"change_type": c.get("change_type"), "column": c.get("column_name") or c.get("constraint_name")}
+            for c in (draft or {}).get("breaking_changes", [])
+        ],
+        # RENAME đã duyệt: message cũ còn trong hàng đợi mang tên cột cũ -> ghi vào cột mới.
+        "column_renames": registry.column_renames(key),
+    }
+
+
+@app.post("/api/pipelines/{pipeline}/components/{component}")
+def report_component(pipeline: str, component: str, payload: dict):
+    """
+    Body: {"state": "running", "role": "sink", "metrics": {"rows_per_sec": 120.5}, "message": "..."}
+    state gợi ý: running | hold | paused | failed | stopped (hiển thị màu tương ứng trên UI).
+    """
+    _monitored_pipeline(pipeline)
+    if not COMPONENT_NAME_RE.match(component):
+        raise HTTPException(status_code=400, detail="Invalid component name (letters, digits, _ and - only)")
+    state, metrics = payload.get("state"), payload.get("metrics") or {}
+    errors = []
+    if not isinstance(state, str) or not 0 < len(state) <= 32:
+        errors.append("state: required string (max 32 chars)")
+    if not isinstance(metrics, dict) or len(metrics) > 30 or not all(
+            isinstance(k, str) and (v is None or isinstance(v, (int, float, str, bool))) for k, v in metrics.items()):
+        errors.append("metrics: mapping of up to 30 scalar values")
+    if errors:
+        _reject(errors)
+    runtime_status.record_component(pipeline, component, {
+        "state": state,
+        "role": str(payload.get("role") or "")[:64],
+        "metrics": metrics,
+        "message": str(payload.get("message") or "")[:500],
+    })
+    return {"status": "ok"}
+
+
+@app.get("/api/pipelines/{pipeline}/components")
+def list_components(pipeline: str):
+    _monitored_pipeline(pipeline)
+    return runtime_status.get_components(pipeline)
 
 
 @app.get("/api/events")
@@ -175,7 +238,8 @@ def get_pipeline_topology():
                 "type": target_type,
                 "configured": target_type != "none"
             },
-            "tables": tables
+            "tables": tables,
+            "components": runtime_status.get_components(pair_name),
         })
     # File cấu hình lỗi: engine không giám sát nhưng vẫn hiện trên UI kèm lý do.
     for file_name, error in config.get("pipeline_errors", {}).items():
