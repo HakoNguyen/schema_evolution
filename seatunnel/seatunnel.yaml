@@ -1,0 +1,12 @@
+seatunnel:
+  engine:
+    backup-count: 1
+    queue-type: blockingqueue
+    print-execution-info-interval: 60
+    slot-service:
+      dynamic-slot: true
+    http:
+      enable: true
+      port: 8080
+    rest:
+      enable: true

@@ -1,0 +1,17 @@
+registry: 
+  dir: "./data/registry"
+
+scheduler:
+  interval_seconds: 60
+
+kafka:
+  bootstrap_servers: "localhost:19092"
+  group_id: "schema-evolution-group"
+  # security_protocol: "SASL_PLAINTEXT"
+  # sasl_mechanism: "PLAIN"
+  # sasl_plain_username: "username"
+  # sasl_plain_password: "password"
+
+telegram: 
+  bot_token: ""  # đặt qua biến môi trường TELEGRAM_BOT_TOKEN
+  chat_id: "8074160008"

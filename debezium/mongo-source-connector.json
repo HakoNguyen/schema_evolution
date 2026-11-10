@@ -1,0 +1,26 @@
+{
+  "name": "mongo-source-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+    "tasks.max": "1",
+    "mongodb.connection.string": "mongodb://host.docker.internal:27017/sample_db?directConnection=true",
+    "topic.prefix": "mongo_to_clickhouse",
+    "database.include.list": "sample_db",
+    "collection.include.list": "sample_db\\.users",
+    "capture.mode": "change_streams_update_full",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+    "tombstones.on.delete": "false",
+    "snapshot.mode": "initial",
+    "poll.interval.ms": "500",
+    "max.batch.size": "8192",
+    "max.queue.size": "32768",
+    "transforms": "unwrap,extractKey",
+    "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.extractKey.type": "org.apache.kafka.connect.transforms.ValueToKey",
+    "transforms.extractKey.fields": "id,_id"
+  }
+}

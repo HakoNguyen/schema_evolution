@@ -34,41 +34,72 @@ In modern enterprise data platforms, backend developers frequently modify source
 
 ### The Solution: Schema Evolution Core Engine
 **Schema Evolution Core** acts as an automated, intelligent **Smart Gatekeeper**:
-- **Non-Breaking Changes (Adding Columns)**: Detects new fields in real-time CDC streams (<0.5s), infers datatypes, and automatically executes `ALTER TABLE target ADD COLUMN ...` on ClickHouse / MySQL target warehouses before data is inserted.
-- **Breaking Changes (Dropping / Narrowing Columns)**: Instantly **FREEZES** the affected table pipeline, isolates the change into a **Sandbox environment**, sends immediate alerts (Telegram / Slack), and requires human-in-the-loop Data Engineer approval.
+- **Non-Breaking Changes (Adding Columns, Widening Types)**: When a CDC event arrives (or the fallback scheduler fires), the engine re-crawls the source table metadata, diffs it against the Schema Registry baseline, and automatically executes `ALTER TABLE target ...` on the ClickHouse / MySQL / Postgres target.
+- **Breaking Changes (Dropping / Renaming / Narrowing Columns)**: Marks the table as **FROZEN in the Schema Registry**, stores the new schema as a draft, sends a Telegram alert, and waits for a Data Engineer to run a **Sandbox test** and approve or reject it. No DDL is executed on the target until approval.
+
+> **Scope note.** The engine governs the *schema* (control plane) only. It does **not** pause the data plane (SeaTunnel / Kafka Connect sinks), and control plane and data plane run in parallel — so there is no ordering guarantee that an auto `ALTER TABLE` lands before the first row carrying the new column reaches the target. A "frozen" table means "schema changes on hold", not "data ingestion stopped".
 
 ---
 
 ## 🏛️ Architecture Topology
 
 ```mermaid
-graph TD
-    subgraph "1. Source Databases (CDC / Change Stream)"
-        PG[(PostgreSQL 5431)]
-        MY[(MySQL 3306)]
-        MG[(MongoDB 27017)]
+graph LR
+    subgraph SOURCES["1. Source Databases"]
+        PG[("PostgreSQL")]
+        MY[("MySQL")]
+        MG[("MongoDB")]
     end
 
-    subgraph "2. Event Streaming Bus (Kafka / Redpanda)"
-        PG & MY & MG -->|Debezium Connectors| K[Redpanda Kafka Broker]
+    subgraph BUS["2. Event Streaming Bus"]
+        K["Redpanda / Kafka Broker"]
     end
 
-    subgraph "3. Schema Evolution Core (Dự án này)"
-        K -->|Lắng nghe DDL & Payload Events| E[FastAPI Core Engine]
-        E -->|Phân loại Change Severity| C{Impact Assessment}
-        C -->|Non-breaking < 0.5s| AUTO[Auto DDL Execution Engine]
-        C -->|Breaking Risk| FREEZE[Freeze Pipeline & Alert Telegram]
-        FREEZE --> SANDBOX[Sandbox Isolated Testing]
-        SANDBOX -->|Approval| AUTO
+    subgraph CONTROL["3. Control Plane (Schema Evolution Engine)"]
+        E["FastAPI Core Engine"]
+        C{"Impact Assessment"}
+        AUTO["Auto DDL Engine"]
+        FREEZE["Pipeline Freeze & Telegram Alert"]
     end
 
-    subgraph "4. Data Ingestion & Target Warehouses"
-        AUTO -->|ALTER TABLE| CH[(ClickHouse Warehouse 8123)]
-        AUTO -->|ALTER TABLE| TGT[(MySQL Target 3306)]
-        K -->|Data Rows Ingestion| ST[Apache SeaTunnel / Sink Connectors]
-        ST -->|INSERT Data Rows| CH
+    subgraph DATA["4. Data Plane (Row Ingestion Cluster)"]
+        ST["Apache SeaTunnel / Sink Connectors"]
     end
+
+    subgraph TARGETS["5. Target Warehouses"]
+        CH[("ClickHouse Warehouse")]
+        TGT[("MySQL Target DB")]
+    end
+
+    PG & MY & MG -->|Debezium CDC| K
+
+    %% Parallel Control Plane Flow (DDL & Schema Evolution)
+    K -->|"CDC events (trigger re-crawl)"| E
+    E -.->|"crawl metadata"| PG & MY & MG
+    E --> C
+    C -->|"Non-Breaking"| AUTO
+    C -->|"Breaking Risk"| FREEZE
+    AUTO -->|"ALTER TABLE (DDL)"| CH & TGT
+
+    %% Parallel Data Plane Flow (Row Ingestion)
+    K -->|"Data Rows Stream"| ST
+    ST -->|"INSERT Rows"| CH & TGT
+
+    style CONTROL fill:#f8f9fa,stroke:#0d6efd,stroke-width:2px
+    style DATA fill:#fff3cd,stroke:#ffc107,stroke-width:2px
+    style TARGETS fill:#d1e7dd,stroke:#198754,stroke-width:2px
 ```
+
+### 🧰 Technology Stack Ecosystem
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18+-61DAFB?style=for-the-badge&logo=react&logoColor=black)
+![Redpanda](https://img.shields.io/badge/Redpanda_Kafka-CDC-FF2E00?style=for-the-badge&logo=redpanda&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![MySQL](https://img.shields.io/badge/MySQL-8.0+-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
+![MongoDB](https://img.shields.io/badge/MongoDB-6.0+-47A248?style=for-the-badge&logo=mongodb&logoColor=white)
+![ClickHouse](https://img.shields.io/badge/ClickHouse-23.8+-FFCC00?style=for-the-badge&logo=clickhouse&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 
 ---
 
@@ -84,8 +115,9 @@ graph TD
 - Automatic legacy file migration and pipeline metadata tracking.
 
 ### 3. Automated Risk Classification Engine
-- **NON-BREAKING**: Column additions, widening length, nullable conversions ➔ Auto-executed in **<0.5 seconds**.
-- **BREAKING**: Column drops, type narrowing, constraint changes ➔ Auto-frozen, saved to draft version, triggers Telegram alert.
+- **NON-BREAKING**: Nullable / defaulted column additions, widening (`varchar(50)→varchar(100)`, `int→bigint`, `numeric(10,2)→numeric(12,2)`), `NOT NULL→NULL`, dropping a foreign key ➔ DDL auto-executed on the target.
+- **BREAKING**: Column drops, renames (heuristic: one-to-one match of an identical column definition), narrowing (incl. unbounded `varchar→varchar(n)` and lost `numeric` precision/scale), incompatible type changes, `NULL→NOT NULL`, PK / FK changes ➔ table frozen in the registry, draft saved, Telegram alert.
+- Not yet detected: changes to a column's `DEFAULT` value.
 
 ### 4. Interactive Web Dashboard UI
 - **Task / Flow Monitor**: Namespace-qualified table monitoring (`pipeline / table`).
@@ -107,7 +139,9 @@ schema-evolution-core/
 │   ├── kafka_consumer.py        # Event-driven CDC Kafka Consumer Thread
 │   ├── payload_extractor.py     # Dynamic Payload Key Extractor & Type Inference
 │   ├── event_log.py             # In-memory Audit Trail Ring Buffer
-│   └── scheduler.py             # Periodic Baseline Scanner
+│   ├── scheduler.py             # Periodic Baseline Scanner
+│   ├── unfreeze_cli.py          # Terminal CLI: list / view / approve / reject
+│   └── app.py                   # Legacy Streamlit UI (registry-only)
 ├── config/                      # Config-as-Code Declarations
 │   ├── main.yaml                # Core System Configuration
 │   └── pipelines/               # Pipeline YAML Files (mongo_to_clickhouse, pg_to_mysql, etc.)
@@ -128,8 +162,11 @@ schema-evolution-core/
 │   ├── core.py                  # Evolution Engine & Registry Manager
 │   ├── engines/                 # Database Drivers (MySQL, Postgres, ClickHouse, Mongo)
 │   └── notification.py          # Telegram & Webhook Notifiers
-├── tests/                       # Automated Test Suites
-│   └── test_payload_pipeline.py # End-to-end CDC Payload Extractor Test
+├── tests/
+│   ├── test_type_classification.py # Unit: widen/narrow classification (no infra needed)
+│   ├── test_rename_heuristic.py    # Unit: rename detection + DDL generation (no infra needed)
+│   ├── benchmark_core.py           # Standalone micro-benchmark of the core library
+│   └── test_payload_pipeline.py    # Manual E2E script (needs the Docker stack running)
 └── docker-compose.yml           # Full Infrastructure Stack (Postgres, MySQL, Mongo, ClickHouse, Redpanda)
 ```
 
@@ -171,23 +208,53 @@ npm run dev
 ```
 Access the Web App Dashboard at: 👉 **`http://localhost:5173`**
 
+### 5. (Alternative) Terminal CLI
+Review frozen tables without the Web UI:
+
+```bash
+python -m app.unfreeze_cli list                          # frozen tables pending approval
+python -m app.unfreeze_cli view    pg_to_mysql/customers # draft + breaking changes
+python -m app.unfreeze_cli approve pg_to_mysql/customers # apply DDL on target, unfreeze
+python -m app.unfreeze_cli reject  pg_to_mysql/customers # discard draft, keep baseline
+```
+
 ---
 
 ## 📊 Supported Databases & Type Mapping
 
-| Generic Type | PostgreSQL | MySQL | MongoDB | ClickHouse |
+| Generic Type | PostgreSQL | MySQL | MongoDB | ClickHouse *(bọc `Nullable(...)` nếu nullable=True)* |
 | :--- | :--- | :--- | :--- | :--- |
-| **`int`** | `INTEGER` | `INT` | `Int32` | `Nullable(Int32)` |
-| **`bigint`** | `BIGINT` | `BIGINT` | `Int64` | `Nullable(Int64)` |
-| **`double`** | `DOUBLE PRECISION` | `DOUBLE` | `Double` | `Nullable(Float64)` |
-| **`boolean`** | `BOOLEAN` | `TINYINT(1)` | `Bool` | `Nullable(Bool)` |
-| **`timestamp`** | `TIMESTAMP` | `DATETIME` | `Date` | `Nullable(DateTime)` |
-| **`varchar`** | `VARCHAR(255)` | `VARCHAR(255)` | `String` | `Nullable(String)` |
-| **`text`** | `TEXT` | `TEXT` | `String` | `Nullable(String)` |
+| **`int`** | `INTEGER` | `INT` | `Int32` | `Int32` |
+| **`bigint`** | `BIGINT` | `BIGINT` | `Int64` | `Int64` |
+| **`double`** | `DOUBLE PRECISION` | `DOUBLE` | `Double` | `Float64` |
+| **`boolean`** | `BOOLEAN` | `TINYINT(1)` | `Bool` | `Bool` |
+| **`timestamp`** | `TIMESTAMP` | `DATETIME` | `Date` | `DateTime` |
+| **`varchar`** | `VARCHAR(255)` | `VARCHAR(255)` | `String` | `String` |
+| **`text`** | `TEXT` | `TEXT` | `String` | `String` |
 
 ---
 
 ## 🧪 Verification & Benchmark Results
+
+### Unit tests (no infrastructure needed)
+```bash
+python tests/test_type_classification.py
+python tests/test_rename_heuristic.py
+```
+
+### Reproducible micro-benchmark (core library only)
+Excludes Kafka, Debezium, SeaTunnel and all databases. Numbers depend on the machine.
+```bash
+python tests/benchmark_core.py
+```
+
+| Measurement | Workload | Result (dev laptop, Python 3.11) |
+| :--- | :--- | :--- |
+| `compare_schemas` latency | 30-column table, 3 diffs, 10,000 runs | ~80 µs / comparison |
+| Payload extractor latency | 9-field JSON CDC message, 50,000 runs | ~23 µs / message |
+
+### End-to-end demo (manual, one-off)
+Measured by hand on the development machine with the full Docker stack running; there is no automated harness that reproduces these numbers.
 
 | Test Scenario | Trigger Action | Measured Latency | Execution Outcome | Status |
 | :--- | :--- | :--- | :--- | :--- |

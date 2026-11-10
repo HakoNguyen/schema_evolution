@@ -1,0 +1,177 @@
+import re
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Optional
+
+_PG_CAST_RE = re.compile(r"::[\w\s\"\[\]]+(\(\d+(,\s*\d+)?\))?$")
+_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_NOW_DEFAULTS = {"current_timestamp", "now()", "current_timestamp()", "localtimestamp"}
+
+
+def render_portable_default(raw: Any, now_sql: str = "CURRENT_TIMESTAMP") -> Optional[str]:
+    """
+    Chuẩn hoá giá trị default crawl được từ DB nguồn thành literal SQL dùng
+    được ở DB đích khác loại. Trả về None nếu không nên mang default sang
+    (VD nextval() của sequence Postgres — chỉ có nghĩa ở DB nguồn).
+
+    - Postgres: "'pending'::character varying" -> "'pending'"
+    - MySQL trả chuỗi không có nháy: "abc" -> "'abc'"
+    - now()/CURRENT_TIMESTAMP -> now_sql
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s.upper() == "NULL" or s.lower().startswith("nextval("):
+        return None
+    s = _PG_CAST_RE.sub("", s).strip()
+    if s.startswith("(") and s.endswith(")") and s.count("(") == 1:
+        s = s[1:-1].strip()
+    if s.lower() in _NOW_DEFAULTS:
+        return now_sql
+    if s.lower() in ("true", "false") or _NUMBER_RE.match(s):
+        return s
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+        return s
+    return "'" + s.replace("'", "''") + "'"
+
+
+class ChangeSeverity(Enum):
+    # Phan loai muc do be cau truc
+    NON_BREAKING = "non_breaking"
+    BREAKING = "breaking"
+
+
+class ChangeType(Enum):
+    # Cac thay doi cau truc he thong nhan dien duoc
+    # non-breaking
+    ADD_COLUMN = "add_column"
+    NOT_NULL_TO_NULLABLE = "not_null_to_nullable"
+    WIDEN_TYPE = "widen_type"
+    # breaking
+    DROP_COLUMN = "drop_column"
+    RENAME_COLUMN = "rename_column"
+    NARROW_TYPE = "narrow_type"
+    CHANGE_TYPE_INCOMPATIBLE = "change_type_incompatible"
+    NULLABLE_TO_NOT_NULL = "nullable_to_not_null"
+    # primary key
+    ADD_PRIMARY_KEY = "add_primary_key"
+    DROP_PRIMARY_KEY = "drop_primary_key"
+    CHANGE_PRIMARY_KEY = "change_primary_key"
+    # foreign key
+    ADD_FOREIGN_KEY = "add_foreign_key"
+    DROP_FOREIGN_KEY = "drop_foreign_key"
+    CHANGE_FOREIGN_KEY_TARGET = "change_fk_target"
+    CHANGE_FOREIGN_KEY_ACTION = "change_fk_action"
+
+
+@dataclass
+class ColumnSchema:
+    """Chuan hoa cho 1 cot, ca SQL va NoSQL"""
+    name: str
+    data_type: str
+    nullable: bool
+    default: Optional[Any] = None
+    max_length: Optional[int] = None
+    # Chỉ dùng cho numeric/decimal; None = không xác định (registry cũ).
+    precision: Optional[int] = None
+    scale: Optional[int] = None
+
+
+@dataclass
+class ForeignKeySchema:
+    """Chuan hoa cho 1 Khoa ngoai"""
+    constraint_name: str
+    column_name: str
+    ref_table: str
+    ref_column: str
+    on_delete: Optional[str] = None
+    on_update: Optional[str] = None
+
+
+@dataclass
+class TableSchema:
+    """Chuan hoa cho cau truc 1 bang hoac collection tai 1 thoi diem"""
+    table_name: str
+    columns: list[ColumnSchema] = field(default_factory=list)
+    primary_key: list[str] = field(default_factory=list)
+    foreign_keys: list[ForeignKeySchema] = field(default_factory=list)
+
+
+@dataclass
+class SchemaChange:
+    """Mo ta thay doi cu the khi phat hien giua Source va Registry"""
+    table_name: str
+    change_type: ChangeType
+    severity: ChangeSeverity
+    column_name: Optional[str] = None
+    constraint_name: Optional[str] = None
+    old_value: Optional[Any] = None
+    new_value: Optional[Any] = None
+
+
+class BaseEngine(ABC):
+    """
+    Interface trừu tượng cho mọi database engine.
+    Mỗi driver cụ thể (PostgresEngine, MySQLEngine, MongoEngine,
+    ClickHouseEngine) phải kế thừa và implement đầy đủ class này.
+    """
+
+    def __init__(self, connection_config: dict):
+        """
+        connection_config: dict chứa host, port, user, password, database....
+        """
+        self.connection_config = connection_config
+        self.connection = None
+
+    @property
+    @abstractmethod
+    def engine_type(self) -> str:
+        """Trả về tên engine, ví dụ: 'postgres', 'mysql', 'mongodb', 'clickhouse'"""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def connect(self) -> None:
+        """Kết nối tới database"""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def disconnect(self) -> None:
+        """Ngắt kết nối tới database"""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def health_check(self) -> bool:
+        """Kiểm tra kết nối tới database"""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def list_tables(self) -> list[str]:
+        """Liệt kê tất cả các bảng/collections trong database"""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def crawl_metadata(self, table_name: str) -> TableSchema:
+        """Crawl metadata của 1 bảng/collection
+        SQL engine doc tu INFORMATION_SCHEMA,
+        NoSQL engine sample N documents, infer type tung file
+        """
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def generate_ddl(self, changes: list[SchemaChange]) -> list[str]:
+        """Tạo danh sách các câu lệnh DDL tương ứng với thay đổi."""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def execute_ddl(self, ddl_statement: str) -> None:
+        """Thực thi trực tiếp câu lệnh DDL trên cơ sở dữ liệu đích."""
+        raise NotImplementedError("Subclasses must implement this method.")
+
+    @abstractmethod
+    def test_ddl(self, changes: list[SchemaChange]) -> tuple[bool, str]:
+        """
+        Chạy thử (dry-run) các thay đổi DDL trong một môi trường an toàn (sandbox).
+        Trả về (True, "Success message") nếu thành công, hoặc (False, "Error message") nếu thất bại.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")

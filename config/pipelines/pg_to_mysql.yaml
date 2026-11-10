@@ -1,0 +1,26 @@
+name: "pg_to_mysql"
+detection:
+  mode: "event_driven"
+  kafka:
+    bootstrap_servers: "localhost:19092"
+    topic: "pg_to_mysql"
+  fallback_polling_interval_seconds: 600
+source:
+  type: "postgres"
+  config:
+    host: "localhost"
+    port: 5431
+    user: "admin"
+    password: "password123"
+    dbname: "sample_db"
+target:
+  type: "mysql"
+  config:
+    host: "localhost"
+    port: 3306
+    user: "root"
+    password: "password123"
+    database: "sample_db"
+tables:
+  - customers
+  - orders

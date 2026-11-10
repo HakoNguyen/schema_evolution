@@ -1,0 +1,48 @@
+# Environments
+venv/
+env/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.DS_Store
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+
+# Data and Registry
+data/
+docker-data/
+*.log
+
+end_to_end_test_report.md
+src_code_review.md
+
+plan/
+bytebase/bytebase-data/
+bytebase_demo/bytebase_data/
+
+# Demo database files (SQLite / H2)
+*.db
+
+# Registry lock files
+data/registry/**/*.lock
+
+# Research side-material (comparison demos & reports) — kept locally, not part of the core system
+atlas_demo/
+liquibase_demo/
+bytebase/
+bytebase_demo/
+kafkaconnect_demo/
+docs/*.md
+Dockerfile
