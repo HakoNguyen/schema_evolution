@@ -3,7 +3,9 @@ from fastapi import FastAPI, HTTPException
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 
+import os
 import sys
+import time
 from pathlib import Path
 import yaml
 
@@ -12,19 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import threading
 from src.schema_evolution.core import SchemaRegistry, approve_change_and_sync
 from src.schema_evolution.notification import TelegramNotifier
-from app.scheduler import main as scheduler_main, DEFAULT_FALLBACK_INTERVAL
+from app.scheduler import (
+    DEFAULT_FALLBACK_INTERVAL, ENGINE_REGISTRY, PIPELINE_NAME_RE, check_with_secrets,
+    load_config as _load_config_files, load_pipeline_specs, validate_main_config, validate_pipeline_spec,
+)
+from app.secret_store import load_env, mask, unmask
 from app import runtime_status
-from src.schema_evolution.engines.postgres import PostgresEngine
-from src.schema_evolution.engines.mysql import MySQLEngine
-from src.schema_evolution.engines.mongo import MongoEngine
-from src.schema_evolution.engines.clickhouse import ClickHouseEngine
-
-ENGINE_REGISTRY = {
-    "postgres": PostgresEngine,
-    "mysql": MySQLEngine,
-    "mongodb": MongoEngine,
-    "clickhouse": ClickHouseEngine,
-}
 
 app = FastAPI(title="Schema Evolution API")
 
@@ -49,41 +44,21 @@ def edit_schema(registry_key: str, payload: dict):
     from api.schema_editor import apply_web_edit
     return apply_web_edit(registry_key, columns_data, registry)
 
-@app.on_event("startup")
-def start_scheduler():
-    def run_scheduler():
-        print("[API] Starting background scheduler...")
-        scheduler_main("config/main.yaml")
-    
-    thread = threading.Thread(target=run_scheduler, daemon=True)
-    thread.start()
+_manager = None  # PipelineManager của engine chạy cùng API
+
 
 @app.on_event("startup")
-def start_kafka_consumer():
-    def run_consumer():
-        print("[API] Starting background Kafka Consumer...")
-        from app.kafka_consumer import start_consumer
-        try:
-            start_consumer("config/main.yaml")
-        except Exception as e:
-            print(f"[API] Kafka Consumer error: {e}")
-            
-    thread = threading.Thread(target=run_consumer, daemon=True)
-    thread.start()
+def start_engine():
+    """Một PipelineManager duy nhất: tự nạp lại main.yaml + config/pipelines/*.yaml, mỗi pipeline một worker."""
+    global _manager
+    from app.pipeline_manager import PipelineManager
+    _manager = PipelineManager("config/main.yaml")
+    threading.Thread(target=_manager.run_forever, daemon=True, name="pipeline-manager").start()
+
 
 def load_config(config_path: str = "config/main.yaml") -> dict:
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    
-    config["pairs"] = []
-    pipelines_dir = Path(config_path).parent / "pipelines"
-    if pipelines_dir.exists() and pipelines_dir.is_dir():
-        for p_file in pipelines_dir.glob("*.yaml"):
-            with open(p_file, "r", encoding="utf-8") as pf:
-                pair_config = yaml.safe_load(pf)
-                if pair_config:
-                    config["pairs"].append(pair_config)
-    return config
+    """Cấu hình engine ĐANG chạy (kể cả khi file vừa bị sửa hỏng), không đọc lại file."""
+    return _manager.snapshot() if _manager is not None else _load_config_files(config_path)
 
 def get_registry(config: dict) -> SchemaRegistry:
     return SchemaRegistry(config["registry"]["dir"])
@@ -102,6 +77,16 @@ def build_target_engine(pair_config: dict):
     engine = engine_cls(target_spec["config"])
     engine.connect()
     return engine
+
+@app.get("/api/flow")
+def get_data_flow():
+    """Số liệu luồng dữ liệu của pipeline demo (demo/): đối chiếu, giá mới nhất, trạng thái loader."""
+    try:
+        from demo.check import flow_snapshot
+        return {"available": True, **flow_snapshot()}
+    except Exception as e:
+        return {"available": False, "error": f"{type(e).__name__}: {e}"}
+
 
 @app.get("/api/events")
 def get_cdc_events():
@@ -192,6 +177,9 @@ def get_pipeline_topology():
             },
             "tables": tables
         })
+    # File cấu hình lỗi: engine không giám sát nhưng vẫn hiện trên UI kèm lý do.
+    for file_name, error in config.get("pipeline_errors", {}).items():
+        pipelines.append({"name": Path(file_name).stem, "file": file_name, "config_error": error, "tables": []})
     return pipelines
 
 @app.get("/")
@@ -344,8 +332,17 @@ def approve_changes(registry_key: str):
     notifier.notify_change_reviewed(
         table_name, approved=True, pair_name=pair_name
     )
+    applied = ", ".join(_summarize_result(result)["applied_to_target"]) or "registry only"
+    _log_review(pair_name, table_name, "approved", f"Approved: {applied} applied to target")
 
     return {"status": "success", "result": _summarize_result(result)}
+
+
+def _log_review(pair_name: str, table_name: str, status: str, text: str) -> None:
+    """Ghi quyết định duyệt vào Live Event, để timeline có cả "chờ duyệt" lẫn kết quả."""
+    from app.event_log import event_logger
+    event_logger.add_event(pipeline_name=pair_name, table_name=table_name,
+                           ddl=f"[review] {text}", status=status, severity="review")
 
 
 def _summarize_result(result: dict) -> dict:
@@ -374,7 +371,8 @@ def reject_changes(registry_key: str):
     notifier.notify_change_reviewed(
         table_name, approved=False, pair_name=pair_name
     )
-    
+    _log_review(pair_name, table_name, "rejected", "Rejected: draft discarded, source must be rolled back")
+
     return {"status": "success"}
 
 @app.post("/api/tables/{registry_key:path}/test_sandbox")
@@ -430,73 +428,121 @@ def get_system_config():
     config_path = Path("config/main.yaml")
     if not config_path.exists():
         raise HTTPException(status_code=404, detail="config/main.yaml not found")
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+    try:
+        return mask(yaml.safe_load(config_path.read_text(encoding="utf-8")) or {})
+    except yaml.YAMLError as e:  # file đang hỏng: engine vẫn chạy bằng cấu hình cũ, UI báo lỗi để sửa
+        return {"_error": f"invalid YAML: {e}"}
+
+PIPELINES_DIR = Path("config/pipelines")
+MAIN_CONFIG = Path("config/main.yaml")
+
+
+def _write_yaml(path: Path, data: dict) -> None:
+    """Ghi nguyên tử (file tạm rồi đổi tên): engine quét mỗi 3s không bao giờ đọc phải file ghi dở."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    for _ in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:  # Windows: engine đang mở file để đọc -> thử lại
+            time.sleep(0.1)
+    os.replace(tmp, path)
+
+
+def _reject(errors: list[str]):
+    raise HTTPException(status_code=422, detail={"message": "Invalid configuration", "errors": errors})
+
+
+def _read_yaml(path: Path) -> dict:
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, yaml.YAMLError):
+        return {}
+
+
+def _clean(payload: dict) -> dict:
+    return {k: v for k, v in payload.items() if not k.startswith("_")}  # bỏ trường chỉ dùng cho UI
+
+
+def _pipeline_file(name: str) -> Path:
+    # Tên đi thẳng vào đường dẫn file: chặn "../" và ký tự lạ.
+    if not PIPELINE_NAME_RE.match(name or ""):
+        raise HTTPException(status_code=400, detail="Invalid pipeline name (letters, digits, _ and - only)")
+    return PIPELINES_DIR / f"{name}.yaml"
+
 
 @app.put("/api/config/system")
 def update_system_config(payload: dict):
-    config_path = Path("config/main.yaml")
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump(payload, f, allow_unicode=True, default_flow_style=False)
-        return {"status": "success", "message": "Saved config/main.yaml"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot save main.yaml: {str(e)}")
+    cfg = unmask(_clean(payload), _read_yaml(MAIN_CONFIG))
+    resolved, errors = check_with_secrets(cfg, load_env(MAIN_CONFIG.parent), validate_main_config)
+    if errors:
+        _reject(errors)
+    _write_yaml(MAIN_CONFIG, cfg)  # ghi bản có ${VAR}, không bao giờ ghi giá trị bí mật đã thay
+    message = "Saved config/main.yaml — applied by the engine within ~3s"
+    if _manager is not None and resolved["registry"]["dir"] != _manager.global_cfg["registry"]["dir"]:
+        message += ". registry.dir change takes effect only after restarting the backend"
+    return {"status": "success", "message": message}
 
 @app.get("/api/config/pipelines")
 def get_pipelines_config():
     pipelines_dir = Path("config/pipelines")
     if not pipelines_dir.exists():
         return []
+    _, errors = load_pipeline_specs(pipelines_dir)
     res = []
     for p_file in sorted(pipelines_dir.glob("*.yaml")):
-        with open(p_file, "r", encoding="utf-8") as pf:
-            cfg = yaml.safe_load(pf)
-            if cfg:
-                cfg["_filename"] = p_file.name
-                res.append(cfg)
+        try:
+            cfg = yaml.safe_load(p_file.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            cfg = None  # YAML hỏng: vẫn liệt kê để người dùng thấy lỗi và sửa
+        if cfg is None and p_file.name not in errors:
+            continue  # file rỗng
+        cfg = mask(cfg) if isinstance(cfg, dict) else {"name": p_file.stem}
+        cfg["_filename"] = p_file.name
+        if p_file.name in errors:
+            cfg["_error"] = errors[p_file.name]
+        res.append(cfg)
     return res
 
 @app.post("/api/config/pipelines")
 def create_pipeline_config(payload: dict):
-    name = payload.get("name")
-    if not name:
-        raise HTTPException(status_code=400, detail="Missing pipeline name")
-    
-    clean_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
-    
-    pipelines_dir = Path("config/pipelines")
-    pipelines_dir.mkdir(parents=True, exist_ok=True)
-    target_file = pipelines_dir / f"{name}.yaml"
-    
-    try:
-        with open(target_file, "w", encoding="utf-8") as f:
-            yaml.dump(clean_payload, f, allow_unicode=True, default_flow_style=False)
-        return {"status": "success", "filename": target_file.name, "message": f"Saved {target_file.name}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot create pipeline YAML: {str(e)}")
+    spec = _clean(payload)
+    _, errors = check_with_secrets(spec, load_env(PIPELINES_DIR.parent), validate_pipeline_spec)
+    if errors:
+        _reject(errors)
+    target_file = _pipeline_file(spec["name"])
+    specs, _ = load_pipeline_specs(PIPELINES_DIR)
+    if target_file.exists() or any(s["name"] == spec["name"] for s in specs):
+        raise HTTPException(status_code=409, detail=f"Pipeline '{spec['name']}' already exists")
+    PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
+    _write_yaml(target_file, spec)
+    return {"status": "success", "filename": target_file.name,
+            "message": f"Saved {target_file.name} — the engine starts monitoring within ~3s"}
 
 @app.put("/api/config/pipelines/{name}")
 def update_pipeline_config(name: str, payload: dict):
-    pipelines_dir = Path("config/pipelines")
-    target_file = pipelines_dir / f"{name}.yaml"
-    
-    clean_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
-    
-    try:
-        with open(target_file, "w", encoding="utf-8") as f:
-            yaml.dump(clean_payload, f, allow_unicode=True, default_flow_style=False)
-        return {"status": "success", "filename": target_file.name, "message": f"Updated {target_file.name}"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cannot update pipeline YAML: {str(e)}")
+    target_file = _pipeline_file(name)
+    if not target_file.exists():
+        raise HTTPException(status_code=404, detail=f"{name}.yaml not found")
+    spec = unmask(_clean(payload), _read_yaml(target_file))  # "********" = giữ bí mật cũ trong file
+    if spec.get("name") != name:
+        # Registry/lịch sử schema gắn với tên pipeline: đổi tên = mồ côi toàn bộ trạng thái cũ.
+        _reject(["name: cannot be changed (schema history is keyed by it); create a new pipeline instead"])
+    _, errors = check_with_secrets(spec, load_env(PIPELINES_DIR.parent), validate_pipeline_spec)
+    if errors:
+        _reject(errors)
+    _write_yaml(target_file, spec)
+    return {"status": "success", "filename": target_file.name,
+            "message": f"Updated {target_file.name} — the engine reloads it within ~3s"}
 
 @app.delete("/api/config/pipelines/{name}")
 def delete_pipeline_config(name: str):
-    pipelines_dir = Path("config/pipelines")
-    target_file = pipelines_dir / f"{name}.yaml"
-    if target_file.exists():
-        target_file.unlink()
-        return {"status": "success", "message": f"Deleted {name}.yaml"}
-    raise HTTPException(status_code=404, detail=f"{name}.yaml not found")
+    target_file = _pipeline_file(name)
+    if not target_file.exists():
+        raise HTTPException(status_code=404, detail=f"{name}.yaml not found")
+    target_file.unlink()
+    return {"status": "success", "message": f"Deleted {name}.yaml — the engine stops monitoring within ~3s"}
 
 

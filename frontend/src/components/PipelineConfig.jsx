@@ -24,12 +24,17 @@ export default function PipelineConfig() {
     sourceHost: 'localhost',
     sourcePort: 5432,
     sourceDb: 'sample_db',
+    sourceUser: '',
+    sourcePassword: '',
     targetType: 'clickhouse',
     targetHost: 'localhost',
     targetPort: 8123,
     targetDb: 'default',
+    targetUser: '',
+    targetPassword: '',
     tables: ''
   });
+  const [formErrors, setFormErrors] = useState([]);
 
   const { addToast } = useToast();
 
@@ -64,11 +69,15 @@ export default function PipelineConfig() {
         sourceType: pipeline.source?.type || 'postgres',
         sourceHost: pipeline.source?.config?.host || 'localhost',
         sourcePort: pipeline.source?.config?.port || 5432,
-        sourceDb: pipeline.source?.config?.database || '',
-        targetType: pipeline.target?.type || 'clickhouse',
+        sourceDb: pipeline.source?.config?.dbname ?? pipeline.source?.config?.database ?? '',
+        sourceUser: pipeline.source?.config?.user || '',
+        sourcePassword: pipeline.source?.config?.password || '',
+        targetType: pipeline.target?.type || 'none',
         targetHost: pipeline.target?.config?.host || 'localhost',
         targetPort: pipeline.target?.config?.port || 8123,
-        targetDb: pipeline.target?.config?.database || '',
+        targetDb: pipeline.target?.config?.dbname ?? pipeline.target?.config?.database ?? '',
+        targetUser: pipeline.target?.config?.user || '',
+        targetPassword: pipeline.target?.config?.password || '',
         tables: (pipeline.tables || []).join(', ')
       });
     } else {
@@ -81,92 +90,121 @@ export default function PipelineConfig() {
         sourceHost: 'localhost',
         sourcePort: 5432,
         sourceDb: 'sample_db',
+        sourceUser: '',
+        sourcePassword: '',
         targetType: 'clickhouse',
         targetHost: 'localhost',
         targetPort: 8123,
         targetDb: 'default',
+        targetUser: '',
+        targetPassword: '',
         tables: 'users, orders'
       });
     }
+    setFormErrors([]);
     setShowModal(true);
+  };
+
+  const credentialInputs = (role) => [['User', 'user', 'text'], ['Password', 'password', 'password']].map(([label, field, type]) => {
+    const key = `${role}${field[0].toUpperCase()}${field.slice(1)}`;
+    return (
+      <div key={key}>
+        <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{label}</label>
+        <input
+          type={type}
+          autoComplete="off"
+          value={formData[key]}
+          onChange={e => setFormData({ ...formData, [key]: e.target.value })}
+          style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+        />
+      </div>
+    );
+  });
+
+  // Thao tác Edit/Delete theo TÊN FILE của dòng đang hiển thị (name trong file có thể khác/trùng file khác).
+  const fileStem = (pipe) => (pipe._filename || `${pipe.name}.yaml`).replace(/\.yaml$/, '');
+
+  // Lỗi từ API: 422 {detail: {message, errors: [...]}} | {detail: "..."}.
+  const errorList = (data) => {
+    const d = data?.detail;
+    if (Array.isArray(d?.errors)) return d.errors;
+    return [typeof d === 'string' ? d : d?.message || t('toast_action_failed')];
+  };
+
+  // Form chỉ quản lý một số trường: ghép lên cấu hình cũ để KHÔNG làm mất các trường khác
+  // (user/password, bootstrap_servers, fallback_polling_interval_seconds, tham số kết nối khác...).
+  const withConnection = (prev, type, host, port, db, user, password) => {
+    const config = { ...(prev?.type === type ? prev.config : {}) }; // đổi engine -> bỏ tham số của engine cũ
+    delete config.dbname;
+    delete config.database;
+    Object.assign(config, { host, port: Number(port), [type === 'postgres' ? 'dbname' : 'database']: db });
+    for (const [key, value] of [['user', user], ['password', password]]) {
+      if (value) config[key] = value; else delete config[key];
+    }
+    return { ...(prev || {}), type, config };
   };
 
   const handleSavePipeline = (e) => {
     e.preventDefault();
     const tableList = formData.tables.split(',').map(t => t.trim()).filter(Boolean);
-    
+    // Bắt đầu từ cấu hình đang có (bỏ trường _ chỉ dùng cho UI) rồi ghi đè phần form quản lý.
+    const base = editingPipeline
+      ? JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(editingPipeline).filter(([k]) => !k.startsWith('_')))))
+      : {};
+
+    const detection = { ...(base.detection || {}), mode: formData.detectionMode };
+    if (formData.detectionMode === 'event_driven') {
+      detection.kafka = { ...(detection.kafka || {}), topic: formData.kafkaTopic.trim() || formData.name };
+    } else {
+      delete detection.kafka;
+    }
+
     const payload = {
+      ...base,
       name: formData.name,
-      detection: {
-        mode: formData.detectionMode
-      },
-      source: {
-        type: formData.sourceType,
-        config: {
-          host: formData.sourceHost,
-          port: Number(formData.sourcePort),
-          database: formData.sourceDb
-        }
-      },
+      detection,
+      source: withConnection(base.source, formData.sourceType, formData.sourceHost, formData.sourcePort,
+                             formData.sourceDb, formData.sourceUser, formData.sourcePassword),
       tables: tableList
     };
-
-    if (formData.detectionMode === 'event_driven') {
-      payload.detection.kafka = {
-        topic: formData.kafkaTopic.trim() || formData.name
-      };
-    }
-
     if (formData.targetType && formData.targetType !== 'none') {
-      payload.target = {
-        type: formData.targetType,
-        config: {
-          host: formData.targetHost,
-          port: Number(formData.targetPort),
-          database: formData.targetDb
-        }
-      };
+      payload.target = withConnection(base.target, formData.targetType, formData.targetHost, formData.targetPort,
+                                      formData.targetDb, formData.targetUser, formData.targetPassword);
+    } else {
+      delete payload.target;
     }
 
-    const url = editingPipeline ? `/api/config/pipelines/${editingPipeline.name}` : '/api/config/pipelines';
-    const method = editingPipeline ? 'PUT' : 'POST';
-
+    const url = editingPipeline ? `/api/config/pipelines/${encodeURIComponent(fileStem(editingPipeline))}` : '/api/config/pipelines';
     fetch(url, {
-      method,
+      method: editingPipeline ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
-    .then(res => {
-      if (!res.ok) throw new Error(t('toast_action_failed'));
-      return res.json();
-    })
-    .then(data => {
-      addToast(t('toast_saved'), "success");
+    .then(async res => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFormErrors(errorList(data));  // giữ form mở để sửa
+        return;
+      }
+      addToast(data.message || t('toast_saved'), "success");
       setShowModal(false);
       fetchConfigs();
     })
-    .catch(err => {
-      console.error(err);
-      addToast(err.message, "error");
-    });
+    .catch(err => setFormErrors([`${t('toast_network_error')}: ${err.message}`]));
   };
 
-  const handleDeletePipeline = (name) => {
-    if (!window.confirm(`${t('confirm_delete')} config/pipelines/${name}.yaml?`)) return;
+  const handleDeletePipeline = (pipe) => {
+    const stem = fileStem(pipe);
+    if (!window.confirm(`${t('confirm_delete')} config/pipelines/${stem}.yaml?`)) return;
 
-    fetch(`/api/config/pipelines/${name}`, { method: 'DELETE' })
-      .then(res => {
-        if (!res.ok) throw new Error(t('toast_action_failed'));
-        return res.json();
-      })
-      .then(data => {
-        addToast(`${t('toast_deleted')}: ${name}`, "info");
+    fetch(`/api/config/pipelines/${encodeURIComponent(stem)}`, { method: 'DELETE' })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(errorList(data).join('; '));
+        addToast(data.message || `${t('toast_deleted')}: ${stem}`, "info");
         fetchConfigs();
       })
-      .catch(err => {
-        console.error(err);
-        addToast(err.message, "error");
-      });
+      .catch(err => addToast(err.message, "error"));
   };
 
   const handleSaveSystemConfig = () => {
@@ -175,18 +213,13 @@ export default function PipelineConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(systemConfig)
     })
-    .then(res => {
-      if (!res.ok) throw new Error(t('toast_action_failed'));
-      return res.json();
-    })
-    .then(data => {
-      addToast(t('toast_saved'), "success");
+    .then(async res => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(errorList(data).join('; '));
+      addToast(data.message || t('toast_saved'), "success");
       fetchConfigs();
     })
-    .catch(err => {
-      console.error(err);
-      addToast(err.message, "error");
-    });
+    .catch(err => addToast(err.message, "error"));
   };
 
   const filteredPipelines = pipelines.filter(p => 
@@ -397,11 +430,16 @@ export default function PipelineConfig() {
 
               <tbody>
                 {filteredPipelines.map((pipe) => (
-                  <tr key={pipe.name}>
+                  <tr key={pipe._filename || pipe.name}>
                     <td>
                       <div>
                         <div style={{ fontWeight: 500 }}>{pipe.name}</div>
                         <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{pipe._filename || `${pipe.name}.yaml`}</code>
+                        {pipe._error && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--danger-color)', marginTop: '4px', maxWidth: '260px' }}>
+                            {t('config_error')}: {pipe._error}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td>
@@ -450,7 +488,7 @@ export default function PipelineConfig() {
                           <Edit2 size={12} /> {t('edit_btn')}
                         </button>
                         <button
-                          onClick={() => handleDeletePipeline(pipe.name)}
+                          onClick={() => handleDeletePipeline(pipe)}
                           className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.8rem', color: 'var(--danger-color)', display: 'flex', alignItems: 'center', gap: '4px' }}
                         >
                           <Trash2 size={12} /> {t('delete_btn')}
@@ -587,6 +625,7 @@ export default function PipelineConfig() {
                       style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
                     />
                   </div>
+                  {credentialInputs('source')}
                 </div>
               </div>
 
@@ -634,6 +673,7 @@ export default function PipelineConfig() {
                       style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
                     />
                   </div>
+                  {credentialInputs('target')}
                 </div>
               </div>
 
@@ -648,6 +688,15 @@ export default function PipelineConfig() {
                   style={{ width: '100%', padding: '10px', background: 'var(--body-bg)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-main)', outline: 'none' }}
                 />
               </div>
+
+              {formErrors.length > 0 && (
+                <div role="alert" ref={el => el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })} style={{ marginBottom: '16px', padding: '10px 12px', border: '1px solid var(--danger-border)', background: 'var(--danger-bg)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--danger-color)' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>{t('config_not_saved')}</div>
+                  <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                    {formErrors.map(err => <li key={err}><code>{err}</code></li>)}
+                  </ul>
+                </div>
+              )}
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button

@@ -199,6 +199,23 @@ export default function PipelineTopology() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {filteredPipelines.map(pipeline => {
+              if (pipeline.config_error) {
+                // File cấu hình lỗi: engine không giám sát pipeline này, các pipeline khác không bị ảnh hưởng.
+                return (
+                  <div key={pipeline.file} style={{ background: 'var(--body-bg)', border: '1px solid var(--danger-border)', borderRadius: '8px', padding: '14px 18px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{pipeline.name}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                        <span className="dot" style={{ color: 'var(--danger-color)' }} />{t('config_error')}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                      <code>config/pipelines/{pipeline.file}</code> · {t('config_error_hint')}
+                    </div>
+                    <code style={{ display: 'block', fontSize: '0.75rem', color: 'var(--danger-color)', marginTop: '6px', whiteSpace: 'pre-wrap' }}>{pipeline.config_error}</code>
+                  </div>
+                );
+              }
               const isSingleView = selectedPipeline !== 'all';
               const isExpanded = isSingleView || !!expandedPipelines[pipeline.name];
 

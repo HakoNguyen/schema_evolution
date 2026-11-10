@@ -1,5 +1,5 @@
+import re
 import sys
-import time
 from pathlib import Path
 
 # Thư mục gốc project (cha của app/) — thêm vào sys.path để import "src.*"
@@ -8,14 +8,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import yaml
 
+from app.secret_store import load_env, missing_error, resolve
+
 from src.schema_evolution.engines.base import BaseEngine
 from src.schema_evolution.engines.postgres import PostgresEngine 
 from src.schema_evolution.engines.mysql import MySQLEngine
 from src.schema_evolution.engines.mongo import MongoEngine
 from src.schema_evolution.engines.clickhouse import ClickHouseEngine
-from src.schema_evolution.core import SchemaRegistry, run_evolution_check, make_registry_key
-from src.schema_evolution.notification import TelegramNotifier
-from app import runtime_status
 
 ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
     "postgres": PostgresEngine,
@@ -27,18 +26,116 @@ ENGINE_REGISTRY: dict[str, type[BaseEngine]] = {
 DEFAULT_FALLBACK_INTERVAL = 600
 
 
-def load_config(config_path: str) -> dict:
+PIPELINE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")  # dùng trong registry key "pipeline/table" và tên file
+
+
+DB_NAME_KEY = {"postgres": "dbname", "mysql": "database", "mongodb": "database", "clickhouse": "database"}
+
+
+def _connection_errors(role: str, engine_type: str, cfg: dict) -> list[str]:
+    errors = []
+    if not cfg.get("host"):
+        errors.append(f"{role}.config.host: required")
+    db_key = DB_NAME_KEY[engine_type]
+    if engine_type == "postgres" and "dbname" in cfg and "database" in cfg:
+        errors.append(f"{role}.config: use only 'dbname' for postgres (both dbname and database given)")
+    elif not (cfg.get(db_key) or (engine_type == "postgres" and cfg.get("database"))):
+        errors.append(f"{role}.config.{db_key}: required for {engine_type}")
+    port = cfg.get("port")
+    if port is None and engine_type in ("mongodb", "clickhouse"):
+        errors.append(f"{role}.config.port: required for {engine_type}")
+    elif port is not None and not str(port).isdigit():
+        errors.append(f"{role}.config.port: must be a number")
+    return errors
+
+
+def validate_pipeline_spec(spec) -> list[str]:
+    """Lỗi cấu hình của 1 pipeline (rỗng = hợp lệ). Chỉ kiểm tra cấu trúc, không kết nối DB."""
+    if not isinstance(spec, dict):
+        return ["file must contain a YAML mapping"]
+    errors = []
+    if not isinstance(spec.get("name"), str) or not PIPELINE_NAME_RE.match(spec["name"]):
+        errors.append("name: required, letters/digits/_/- only")
+    for role, required in (("source", True), ("target", False)):
+        part = spec.get(role)
+        if part is None:
+            if required:
+                errors.append(f"{role}: required")
+        elif not isinstance(part, dict) or part.get("type") not in ENGINE_REGISTRY:
+            errors.append(f"{role}.type: must be one of {sorted(ENGINE_REGISTRY)}")
+        elif not isinstance(part.get("config"), dict):
+            errors.append(f"{role}.config: required mapping")
+        else:
+            errors += _connection_errors(role, part["type"], part["config"])
+    tables = spec.get("tables")
+    if not isinstance(tables, list) or not tables or not all(isinstance(t, str) and t for t in tables):
+        errors.append("tables: non-empty list of table names")
+    detection = spec.get("detection") or {}
+    if not isinstance(detection, dict) or detection.get("mode", "polling") not in ("polling", "event_driven"):
+        errors.append("detection.mode: polling or event_driven")
+    return errors
+
+
+def validate_main_config(cfg) -> list[str]:
+    """Lỗi của config/main.yaml (rỗng = hợp lệ)."""
+    if not isinstance(cfg, dict):
+        return ["file must contain a YAML mapping"]
+    errors = []
+    if not isinstance((cfg.get("registry") or {}).get("dir"), str):
+        errors.append("registry.dir: required")
+    for section in ("kafka", "telegram", "scheduler"):
+        if cfg.get(section) is not None and not isinstance(cfg[section], dict):
+            errors.append(f"{section}: must be a mapping")
+    interval = (cfg.get("scheduler") or {}).get("interval_seconds", 60) if isinstance(cfg.get("scheduler"), dict) else 60
+    if not isinstance(interval, int) or interval <= 0:
+        errors.append("scheduler.interval_seconds: positive integer")
+    return errors
+
+
+def check_with_secrets(raw, env: dict, validate) -> tuple[object, list[str]]:
+    """Thay ${VAR} bằng giá trị thật rồi kiểm tra. Trả về (bản đã thay, lỗi)."""
+    missing: set[str] = set()
+    resolved = resolve(raw, env, missing)
+    problems = validate(resolved)
+    if missing:
+        problems.insert(0, missing_error(missing))
+    return resolved, problems
+
+
+def load_pipeline_specs(pipelines_dir: Path, env: dict | None = None) -> tuple[list[dict], dict[str, str]]:
+    """
+    Đọc mọi config/pipelines/*.yaml, thay ${VAR} bằng bí mật thật (config/secrets.env + env).
+    File lỗi (YAML hỏng, thiếu trường, thiếu bí mật, trùng tên) chỉ bị ghi vào
+    errors[tên file] — các pipeline khác vẫn được nạp bình thường.
+    """
+    env = load_env(pipelines_dir.parent) if env is None else env
+    specs, errors, owner = [], {}, {}
+    for f in sorted(pipelines_dir.glob("*.yaml")) if pipelines_dir.is_dir() else []:
+        try:
+            raw = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as e:
+            errors[f.name] = f"invalid YAML: {e}"
+            continue
+        if raw is None:
+            continue  # file rỗng
+        spec, problems = check_with_secrets(raw, env, validate_pipeline_spec)
+        if not problems and spec["name"] in owner:
+            problems = [f"name '{spec['name']}' already used by {owner[spec['name']]}"]
+        if problems:
+            errors[f.name] = "; ".join(problems)
+            continue
+        owner[spec["name"]] = f.name
+        specs.append(spec)
+    return specs, errors
+
+
+def load_config(config_path: str = "config/main.yaml") -> dict:
+    """Cấu hình đã thay bí mật (cho CLI/công cụ chạy rời; engine dùng PipelineManager)."""
+    config_dir = Path(config_path).parent
+    env = load_env(config_dir)
     with open(config_path, "r", encoding="utf-8") as f:
-        config = yaml.safe_load(f)
-    
-    config["pairs"] = []
-    pipelines_dir = Path(config_path).parent / "pipelines"
-    if pipelines_dir.exists() and pipelines_dir.is_dir():
-        for p_file in pipelines_dir.glob("*.yaml"):
-            with open(p_file, "r", encoding="utf-8") as pf:
-                pair_config = yaml.safe_load(pf)
-                if pair_config:
-                    config["pairs"].append(pair_config)
+        config = resolve(yaml.safe_load(f), env, set())
+    config["pairs"], config["pipeline_errors"] = load_pipeline_specs(config_dir / "pipelines", env)
     return config
 
 def build_pairs(pairs_config: list[dict]) -> list[dict]:
@@ -72,60 +169,6 @@ def ensure_connected(engine: BaseEngine) -> None:
     except Exception:
         pass
     engine.connect()
-
-
-def run_cycle(
-    pairs: list[dict],
-    registry: SchemaRegistry, 
-    notifier: TelegramNotifier,
-    default_interval: int = 60,
-    force_all: bool = False
-) -> None: 
-    now = time.time()
-    for item in pairs: 
-        name = item["name"]
-        source_engine = item["source_engine"]
-        target_engine = item["target_engine"]
-        tables = item["tables"]
-        detection = item.get("detection", {})
-        mode = detection.get("mode", "polling")
-
-        if mode == "event_driven":
-            pair_interval = detection.get("fallback_polling_interval_seconds", DEFAULT_FALLBACK_INTERVAL)
-        else:
-            pair_interval = default_interval
-
-        if not force_all and (now - item.get("last_run", 0) < pair_interval):
-            continue
-
-        item["last_run"] = now
-
-        try:
-            ensure_connected(source_engine)
-            if target_engine is not None:
-                ensure_connected(target_engine)
-        except Exception as e:
-            print(f"[scheduler] Khong ket noi duoc '{name}': {e}")
-            runtime_status.record_scan(name, ok=False, error=f"Mất kết nối: {e}")
-            continue
-
-        mode_label = f"event_driven fallback ({pair_interval}s)" if mode == "event_driven" else f"polling ({pair_interval}s)"
-        print(f"[scheduler] Executing scan for '{name}' [{mode_label}]...")
-
-        errors = []
-        for table_name in tables:
-            try:
-                registry_key = make_registry_key(name, table_name)
-                result = run_evolution_check(
-                    source_engine, target_engine, table_name, registry, notifier,
-                    registry_key=registry_key,
-                )
-                print(f"[scheduler] {name}.{table_name}: {result['status']}")
-                log_detected_change(name, table_name, result, source="polling")
-            except Exception as e:
-                errors.append(f"{table_name}: {e}")
-                print(f"[scheduler] Loi khi quet {name}.{table_name}: {e}")
-        runtime_status.record_scan(name, ok=not errors, error="; ".join(errors) or None)
 
 
 def log_detected_change(pipeline: str, table_name: str, result: dict, source: str) -> None:
@@ -164,40 +207,10 @@ def log_detected_change(pipeline: str, table_name: str, result: dict, source: st
     )
         
 def main(config_path: str = "config/main.yaml") -> None:
-    if __name__ == "__main__" and len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    config = load_config(config_path)
+    """Chạy engine độc lập (không kèm API): python app/scheduler.py [config/main.yaml]."""
+    from app.pipeline_manager import PipelineManager
+    PipelineManager(config_path).run_forever()
 
-    registry = SchemaRegistry(config["registry"]["dir"])
-    notifier = TelegramNotifier(
-        bot_token=config["telegram"]["bot_token"],
-        chat_id=config["telegram"]["chat_id"],
-    )
-    pairs = build_pairs(config["pairs"])
-    default_interval = config["scheduler"]["interval_seconds"]
-    print(f"[scheduler] Starting loop, default interval {default_interval}s. Ctrl+C to stop.")
-    
-    try:
-        while True:
-            try:
-                run_cycle(pairs, registry, notifier, default_interval=default_interval)
-            except Exception as e:
-                # Không để 1 lỗi bất ngờ làm chết cả vòng lặp scheduler.
-                print(f"[scheduler] Loi khong mong doi trong chu ky: {e}")
-            time.sleep(5)
-    except KeyboardInterrupt:
-        print("\n[scheduler] Nhan Ctrl+C, dang dong ket noi...")
-    finally:
-        for item in pairs:
-            for engine_key in ("source_engine", "target_engine"):
-                engine = item.get(engine_key)
-                if engine is None:
-                    continue
-                try:
-                    engine.disconnect()
-                except Exception:
-                    pass
-        print("[scheduler] Da dung.")
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1] if len(sys.argv) > 1 else "config/main.yaml")

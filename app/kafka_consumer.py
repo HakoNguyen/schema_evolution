@@ -1,8 +1,12 @@
+"""
+Kafka consumer của engine: MỘT consumer cho mỗi Kafka cluster, chỉ đọc message và chuyển
+cho worker của pipeline tương ứng (app/pipeline_manager.py). Việc kiểm tra schema chạy trong
+worker -> pipeline chậm/lỗi không làm chậm pipeline khác dùng chung cluster.
+"""
 import re
 import sys
 import json
 import hashlib
-import time
 import threading
 from pathlib import Path
 from kafka import KafkaConsumer
@@ -10,13 +14,7 @@ from kafka import KafkaConsumer
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.schema_evolution.core import SchemaRegistry, run_evolution_check, make_registry_key
 from app import runtime_status
-from src.schema_evolution.notification import TelegramNotifier
-try:
-    from app.scheduler import load_config, build_pairs, ensure_connected, log_detected_change
-except ModuleNotFoundError:
-    from scheduler import load_config, build_pairs, ensure_connected, log_detected_change
 
 
 def _topic_pattern(topics: list[str]) -> str:
@@ -28,16 +26,11 @@ def _topic_matches(topic: str, configured: str) -> bool:
     return topic == configured or topic.startswith(configured + ".")
 
 
-def _pair_topic(p: dict) -> str:
-    detection = p.get("detection") or {}
-    return detection.get("kafka", {}).get("topic", p["name"])
-
-
 def _resolve_tables(raw_name: str | None, pair: dict) -> list[str]:
     """
     Chuẩn hoá tên bảng từ event Kafka về ĐÚNG tên trong cấu hình pipeline
     (bỏ schema/db prefix, dấu nháy, so khớp không phân biệt hoa thường), để
-    Kafka và scheduler cùng ghi vào 1 registry key. Bảng không nằm trong
+    Kafka và polling cùng ghi vào 1 registry key. Bảng không nằm trong
     cấu hình -> bỏ qua (không tạo bản ghi registry lạ). Không xác định được
     bảng -> quét lại tất cả bảng của pipeline.
     """
@@ -64,10 +57,6 @@ def _extract_raw_table(payload: dict, ddl) -> str | None:
     )
 
 
-# registry_key -> fingerprint cấu trúc message gần nhất đã được kiểm tra.
-_seen_fingerprints: dict[str, str] = {}
-
-
 def _schema_fingerprint(data: dict, data_dict) -> str | None:
     """
     Dấu vân tay cấu trúc của 1 message dữ liệu. Debezium (schemas.enable=true): hash phần
@@ -82,8 +71,12 @@ def _schema_fingerprint(data: dict, data_dict) -> str | None:
     return hashlib.sha1(json.dumps(basis, sort_keys=True).encode()).hexdigest()
 
 
-def _handle_message(message, event_driven_pairs: list[dict], registry: SchemaRegistry, notifier) -> None:
-    data = json.loads(message.value.decode('utf-8'))
+def route_message(message, workers: list) -> None:
+    """Xác định pipeline + bảng của message rồi báo cho worker (không chạy kiểm tra ở đây)."""
+    worker = next((w for w in workers if w.matches(message.topic)), None)
+    if worker is None:
+        return
+    data = json.loads(message.value.decode("utf-8"))
     payload = data.get("payload", data)
     if not isinstance(payload, dict):
         return
@@ -95,162 +88,84 @@ def _handle_message(message, event_driven_pairs: list[dict], registry: SchemaReg
     if not ddl and not data_dict:
         return
 
-    matching_pair = next(
-        (p for p in event_driven_pairs
-         if _topic_matches(message.topic, _pair_topic(p)) or _topic_matches(message.topic, p["name"])),
-        None,
-    )
-    if not matching_pair:
-        print(f"[Kafka Consumer] No matching pipeline config found for topic {message.topic}")
-        return
-
     raw_table = _extract_raw_table(payload, ddl)
     if not raw_table and message.topic.count(".") >= 1:
         # Topic Debezium "<prefix>.<db>.<table>": phần cuối là tên bảng.
         raw_table = message.topic.rsplit(".", 1)[-1]
-    tables = _resolve_tables(raw_table, matching_pair)
-    if not tables:
-        print(f"[Kafka Consumer] Bảng '{raw_table}' không thuộc pipeline '{matching_pair['name']}', bỏ qua.")
-        return
-
-    # Message dữ liệu mang cấu trúc y hệt lần trước -> schema nguồn không đổi, khỏi crawl.
-    # (Trước đây mọi message đều crawl metadata nguồn: vài chục trade/s = vài chục query catalog/s.)
+    # DDL event luôn buộc kiểm tra (fingerprint None); message dữ liệu chỉ khi cấu trúc đổi.
     fingerprint = None if ddl else _schema_fingerprint(data, data_dict)
-    keys = [make_registry_key(matching_pair["name"], t) for t in tables]
-    if fingerprint is not None and all(_seen_fingerprints.get(k) == fingerprint for k in keys):
-        return
-
-    source_engine = matching_pair["source_engine"]
-    target_engine = matching_pair["target_engine"]
-    ensure_connected(source_engine)
-    if target_engine is not None:
-        ensure_connected(target_engine)
-
-    for table_name, registry_key in zip(tables, keys):
-        print(f"[Kafka Consumer] {'DDL' if ddl else 'Schema fingerprint changed'} on '{registry_key}'. Running evolution check...")
-        result = run_evolution_check(
-            source_engine, target_engine, table_name, registry, notifier,
-            registry_key=registry_key,
-        )
-        # Chỉ ghi nhớ sau khi kiểm tra thành công: lỗi giữa chừng -> message sau kiểm tra lại.
-        if fingerprint is not None:
-            _seen_fingerprints[registry_key] = fingerprint
-        print(f"[Kafka Consumer] {registry_key}: {result.get('status', 'unknown')}")
-        log_detected_change(matching_pair["name"], table_name, result, source="kafka")
+    for table in _resolve_tables(raw_table, worker.spec):
+        worker.notify(table, fingerprint)
 
 
-def run_consumer_for_cluster(cluster_kafka_config: dict, cluster_pairs: list[dict], registry: SchemaRegistry, notifier: TelegramNotifier) -> None:
-    event_driven_pairs = [p for p in cluster_pairs if (p.get("detection") or {}).get("mode") == "event_driven"]
-    if not event_driven_pairs:
-        print(f"[Kafka Consumer] Không có pipeline nào bật chế độ event-driven trong cluster {cluster_kafka_config.get('bootstrap_servers', 'localhost:19092')}. Bỏ qua.")
-        return
-
-    topics = [_pair_topic(p) for p in event_driven_pairs]
-    kafka_bootstrap = cluster_kafka_config.get("bootstrap_servers", "localhost:19092")
-    group_id = cluster_kafka_config.get("group_id", "schema-evolution-group")
-
-    consumer_kwargs = {
-        "bootstrap_servers": [s.strip() for s in kafka_bootstrap.split(",")],
+def _consumer_kwargs(bootstrap: str, kafka_cfg: dict) -> dict:
+    kwargs = {
+        "bootstrap_servers": [s.strip() for s in bootstrap.split(",")],
         "auto_offset_reset": "latest",
         "enable_auto_commit": True,
-        "group_id": group_id,
+        "group_id": kafka_cfg.get("group_id", "schema-evolution-group"),
     }
     for key in ("security_protocol", "sasl_mechanism", "sasl_plain_username", "sasl_plain_password"):
-        if key in cluster_kafka_config and cluster_kafka_config[key]:
-            consumer_kwargs[key] = cluster_kafka_config[key]
+        if kafka_cfg.get(key):
+            kwargs[key] = kafka_cfg[key]
+    return kwargs
 
-    # Vòng ngoài không bao giờ thoát: broker chết -> đánh dấu disconnected,
-    # chờ rồi kết nối lại (backoff tối đa 60s). Trong lúc đó polling dự
-    # phòng của scheduler vẫn quét các bảng event-driven.
+
+def run_cluster_consumer(bootstrap: str, manager, stop: threading.Event) -> None:
+    """
+    Consumer cho 1 cluster. Đăng ký lại pattern topic mỗi khi danh sách pipeline đổi
+    (manager.version), tự thoát khi cluster không còn pipeline event_driven nào.
+    Broker chết -> đánh dấu disconnected, thử lại (backoff tối đa 60s); trong lúc đó
+    worker vẫn quét định kỳ dự phòng.
+    """
     backoff = 5
-    while True:
+    while not stop.is_set():
+        workers = manager.event_workers(bootstrap)
+        if not workers:
+            break
         consumer = None
-        runtime_status.record_consumer(kafka_bootstrap, "connecting")
+        runtime_status.record_consumer(bootstrap, "connecting")
         try:
-            print(f"[Kafka Consumer] Connecting to Kafka cluster at {kafka_bootstrap} (Topics: {topics})...")
-            # Debezium publish theo "<topic.prefix>.<db>.<table>" (VD
-            # mongo_to_clickhouse.sample_db.users) chứ không phải đúng tên
-            # topic cấu hình -> subscribe theo pattern để nhận cả 2 dạng.
-            consumer = KafkaConsumer(**consumer_kwargs)
-            consumer.subscribe(pattern=_topic_pattern(topics))
-            runtime_status.record_consumer(kafka_bootstrap, "connected")
-            print(f"[Kafka Consumer] Connected successfully to Kafka cluster at {kafka_bootstrap}!")
+            consumer = KafkaConsumer(**_consumer_kwargs(bootstrap, workers[0].kafka_cfg))
+            runtime_status.record_consumer(bootstrap, "connected")
+            print(f"[Kafka Consumer] Connected to {bootstrap}")
             backoff = 5
-
-            for message in consumer:
-                if message.value is None:
-                    continue
-                try:
-                    _handle_message(message, event_driven_pairs, registry, notifier)
-                except Exception as e:
-                    print(f"[Kafka Consumer] Error processing message: {e}")
-        except KeyboardInterrupt:
-            print(f"[Kafka Consumer] Stopping consumer for cluster {kafka_bootstrap}...")
-            return
+            version, pattern = None, None
+            while not stop.is_set():
+                if manager.version != version:
+                    version = manager.version
+                    workers = manager.event_workers(bootstrap)
+                    if not workers:
+                        return
+                    new_pattern = _topic_pattern(sorted({w.topic for w in workers}))
+                    if new_pattern != pattern:
+                        # Debezium publish "<topic.prefix>.<db>.<table>" -> subscribe theo pattern.
+                        consumer.subscribe(pattern=new_pattern)
+                        pattern = new_pattern
+                        print(f"[Kafka Consumer] {bootstrap}: topics {sorted({w.topic for w in workers})}")
+                for msgs in consumer.poll(timeout_ms=1000).values():
+                    for m in msgs:
+                        if m.value is None:
+                            continue
+                        try:
+                            route_message(m, workers)
+                        except Exception as e:
+                            print(f"[Kafka Consumer] Error processing message on {m.topic}: {e}")
         except Exception as e:
-            runtime_status.record_consumer(kafka_bootstrap, "disconnected", error=str(e))
-            print(f"[Kafka Consumer] Connection to {kafka_bootstrap} lost/failed: {e}. Retrying in {backoff}s...")
+            runtime_status.record_consumer(bootstrap, "disconnected", error=str(e))
+            print(f"[Kafka Consumer] {bootstrap} lost/failed: {e}. Retrying in {backoff}s...")
         finally:
             if consumer:
                 try:
                     consumer.close()
                 except Exception:
                     pass
-        time.sleep(backoff)
+        if stop.wait(backoff):
+            break
         backoff = min(backoff * 2, 60)
-
-
-def start_consumer(config_path: str = "config/main.yaml") -> None:
-    try:
-        config = load_config(config_path)
-    except Exception as e:
-        print(f"[Kafka Consumer] Failed to load config: {e}")
-        return
-
-    registry = SchemaRegistry(config["registry"]["dir"])
-    notifier = TelegramNotifier(
-        bot_token=config["telegram"]["bot_token"],
-        chat_id=config["telegram"]["chat_id"],
-    )
-
-    try:
-        pairs = build_pairs(config["pairs"])
-    except Exception as e:
-        print(f"[Kafka Consumer] Failed to build pairs: {e}")
-        return
-
-    global_kafka_config = config.get("kafka", {})
-
-    # Group database pairs by their target Kafka cluster
-    clusters: dict[str, tuple[dict, list[dict]]] = {}
-    for p in pairs:
-        # Check if pipeline YAML overrides Kafka config, otherwise fallback to global main.yaml kafka config
-        pipeline_kafka_cfg = {**global_kafka_config, **((p.get("detection") or {}).get("kafka") or {})}
-        bootstrap = pipeline_kafka_cfg.get("bootstrap_servers", "localhost:19092")
-        
-        if bootstrap not in clusters:
-            clusters[bootstrap] = (pipeline_kafka_cfg, [])
-        clusters[bootstrap][1].append(p)
-
-    print(f"[Kafka Consumer] Detected {len(clusters)} distinct Kafka Cluster(s) across pipelines.")
-
-    threads = []
-    for bootstrap, (k_cfg, c_pairs) in clusters.items():
-        t = threading.Thread(
-            target=run_consumer_for_cluster,
-            args=(k_cfg, c_pairs, registry, notifier),
-            name=f"KafkaConsumerThread-{bootstrap}",
-            daemon=True
-        )
-        t.start()
-        threads.append(t)
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("[Kafka Consumer] Stopping all Kafka cluster consumer threads...")
+    runtime_status.record_consumer(bootstrap, "stopped")
 
 
 if __name__ == "__main__":
-    start_consumer()
+    from app.scheduler import main
+    main()

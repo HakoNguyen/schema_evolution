@@ -23,6 +23,12 @@ def record_scan(pipeline: str, ok: bool, error: str | None = None) -> None:
         st["last_error"] = error
 
 
+def forget(pipeline: str) -> None:
+    """Pipeline bị xoá/nạp lại: bỏ trạng thái quét cũ để UI không hiển thị số liệu cũ."""
+    with _lock:
+        _pipelines.pop(pipeline, None)
+
+
 def record_consumer(bootstrap: str, state: str, error: str | None = None) -> None:
     """state: connecting | connected | disconnected"""
     with _lock:
