@@ -43,8 +43,9 @@ Binance WebSocket ──► ingestor ──► Postgres  exchange.public.trades 
 | [`bench.py`](bench.py) | Đo cho báo cáo: `schema` (lặp N lần, p50/p95) và `soak` (chạy liên tục M phút) |
 | [`results/`](results/) | Kết quả đo dạng JSON, dùng làm bằng chứng cho báo cáo |
 | [`start.ps1`](start.ps1) | Khởi động toàn bộ demo bằng một lệnh, mỗi tiến trình một cửa sổ |
-| `GET /api/flow` ([`../api/main.py`](../api/main.py)) | Số liệu cho UI: đối chiếu, giá mới nhất, trạng thái 2 loader (đọc từ `data/flow/*.json` do loader ghi) |
-| [`../frontend/src/components/DataFlow.jsx`](../frontend/src/components/DataFlow.jsx) | Trang **Live Data Flow** trên UI, là màn hình chính của buổi demo |
+| Gate API `GET /api/gate/market_trades/trades` | Loader hỏi engine bảng đang `open` hay `frozen` (kèm `column_renames`) trước khi ghi |
+| Reporting API `POST /api/pipelines/market_trades/components/<tên>` | `loader`, `naive-loader`, `reconciler` (`check --report`) tự báo trạng thái + chỉ số để hiện trên UI |
+| [`../frontend/src/components/PipelinesOverview.jsx`](../frontend/src/components/PipelinesOverview.jsx) | Trang **Pipelines Overview**: mọi pipeline + thành phần tự báo cáo, là màn hình chính của buổi demo |
 | [`../config/pipelines/market_trades.yaml`](../config/pipelines/market_trades.yaml) | Khai báo pipeline cho engine |
 
 ---
@@ -76,7 +77,7 @@ cd frontend; npm run dev                 # UI tại http://localhost:5173
 python -m demo.ingestor                  # trade thật -> Postgres
 python -m demo.loader                    # Kafka -> ClickHouse (có engine bảo vệ)
 python -m demo.loader --naive            # pipeline đối chứng (không có engine)
-python -m demo.check --watch             # bảng đối chiếu, cập nhật mỗi 2s
+python -m demo.check --watch --report    # đối chiếu mỗi 2s, báo lên engine (hiện trên UI)
 ```
 
 Các trang hữu ích:
@@ -224,7 +225,7 @@ Khoảng chờ 44 giây là do engine đang ở chế độ quét định kỳ. 
 
 ---
 
-## Phase 3: trang Live Data Flow
+## Phase 3: trang Live Data Flow (đã thay bằng Pipelines Overview, xem mục Hợp đồng tích hợp)
 
 Trang mặc định của UI tại http://localhost:5173. Mọi thứ cần cho buổi demo nằm trên **một màn hình**, tự cập nhật mỗi 1,5 giây.
 
@@ -249,6 +250,26 @@ Chi tiết cài đặt:
 
 ---
 
+## Hợp đồng tích hợp: demo chỉ là một client của engine
+
+Engine là framework trung gian và **không import hay đọc gì của demo**. Demo cũng **không đọc file nội bộ của engine**. Hai bên chỉ nói chuyện qua HTTP:
+
+| Hướng | API | Demo dùng để |
+|---|---|---|
+| data plane → engine | `GET /api/gate/{pipeline}/{table}` → `{state: open\|frozen, schema_version, pending_changes, column_renames}` | Loader hỏi trước mỗi lô; `frozen` thì PAUSE |
+| data plane → engine | `POST /api/pipelines/{pipeline}/components/{name}` `{state, role, metrics{}, message}` | `loader`, `naive-loader`, `reconciler` báo trạng thái và chỉ số; trang Overview hiển thị nguyên các chỉ số đó |
+| UI → engine | `GET /api/topology` (mỗi pipeline kèm `components`) | Trang Pipelines Overview |
+
+Một thành phần im lặng quá 15 giây sẽ bị coi là `stale` (riêng `failed` thì giữ nguyên). Khi không liên lạc được Gate API, loader **giữ trạng thái đã biết gần nhất** (fail-static); cơ chế HOLD với cột lạ vẫn bảo vệ dữ liệu.
+
+**Lỗi phát hiện ở tốc độ cao (khoảng 1.000 dòng/giây) và đã sửa: đổi tên cột làm loader chết.** Khi duyệt `RENAME qty → quantity`, trong Kafka vẫn còn message cũ mang tên `qty` chưa được ghi. Warehouse đổi tên xong, loader ghi các message cũ đó và gặp lỗi `Unrecognized column 'qty'`, rồi dừng hẳn (không mất dữ liệu nhưng luồng đứng yên). Cách sửa:
+- Engine **ghi lại các lần đổi tên đã duyệt** (`column_renames`, có nối chuỗi `a→b→c`) **trước** khi gỡ freeze, và trả về qua Gate API.
+- Loader **ánh xạ tên cột cũ sang tên mới**. Nếu warehouse vừa đổi schema sau lần đọc trước, loader đọc lại rồi ghi lại cả lô (bản ghi trùng được `ReplacingMergeTree` gộp lại).
+
+Đã kiểm chứng ở khoảng 340 trade/giây: loader gặp đúng lỗi cũ, tự xử lý rồi chạy tiếp, **mất 0 dòng**.
+
+---
+
 ## Xử lý sự cố
 
 | Triệu chứng | Cách xử lý |
@@ -269,7 +290,7 @@ Chi tiết cài đặt:
 - [x] **Phase 0**: kiểm tra định dạng message, fingerprint, độ dài varchar, sửa bug FixedString
 - [x] **Phase 1**: ingestor (live, record, replay), bảng nguồn và đích, connector, loader có HOLD, đối chiếu theo mốc, setup/reset
 - [x] **Phase 2**: fingerprint và chế độ `event_driven`, loader PAUSE theo freeze, pipeline đối chứng `--naive`, `scenario.py`, tự gỡ freeze khi nguồn rollback, cùng 6 bug đã sửa (xem bên trên)
-- [x] **Phase 3**: `/api/flow`, trang Live Data Flow (thẻ số liệu, sparkline, 2 làn pipeline, nút duyệt, timeline có cả Approved/Rejected/Resolved)
+- [x] **Phase 3**: trang Live Data Flow (sau đó thay bằng Pipelines Overview + Gate/Reporting API) (thẻ số liệu, sparkline, 2 làn pipeline, nút duyệt, timeline có cả Approved/Rejected/Resolved)
 - [ ] **Phase 4**: đo p50/p95 qua nhiều lần chạy, thử replay, chạy liên tục lâu, tập dượt
 
 ### Kịch bản cho ngày demo (thứ Năm)
@@ -278,7 +299,7 @@ Trước buổi demo: chạy `--reset`, khởi động 4 tiến trình cùng UI,
 
 | Bước | Lệnh | Kết quả mong đợi (đã kiểm chứng trong phase 2) |
 |---|---|---|
-| 0 | Mở **Live Data Flow** trên UI | Giá coin nhảy, hai làn đều "Đang chạy", dòng bị mất = 0 |
+| 0 | Mở **Pipelines Overview** trên UI | `loader` và `naive-loader` đều `running`, `reconciler` báo `ok`, Lost rows = 0 |
 | 1 | `python -m demo.scenario add_column` | **Làn đối chứng chuyển sang "Đã hỏng".** Có engine: tự thêm cột sau khoảng 1 giây, không gián đoạn |
 | 2 | `python -m demo.scenario widen` | WIDEN, tự áp dụng sau khoảng 1,4 giây |
 | 3 | `python -m demo.scenario rename` | Làn chính "Tạm dừng: chờ duyệt". Bấm **Review & Approve**, chạy sandbox, Approve, quay lại Data Flow: loader xử lý phần tồn |

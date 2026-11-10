@@ -71,7 +71,19 @@ def test_bench_percentile():
     print("[PASS] test_bench_percentile")
 
 
+def test_apply_renames():
+    from demo.loader import apply_renames
+    row = {"trade_id": 1, "qty": 2}
+    # Đích đã đổi qty -> quantity: message cũ ghi vào cột mới.
+    assert apply_renames(row, {"qty": "quantity"}, {"trade_id", "quantity"}) == {"trade_id": 1, "quantity": 2}
+    # Đích vẫn còn cột cũ (chưa áp dụng rename): giữ nguyên.
+    assert apply_renames(row, {"qty": "quantity"}, {"trade_id", "qty"}) == row
+    assert apply_renames(row, {}, {"trade_id"}) is row
+    print("[PASS] test_apply_renames")
+
+
 if __name__ == "__main__":
+    test_apply_renames()
     test_decode_decimal()
     test_parse_message()
     test_clickhouse_varchar_is_string()

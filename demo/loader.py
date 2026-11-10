@@ -18,7 +18,6 @@ lỗi và dừng hẳn (task FAILED) -> dữ liệu ngừng chảy vào warehous
 import argparse
 import base64
 import json
-import os
 import sys
 import time
 from collections import deque
@@ -26,6 +25,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import clickhouse_connect
+import requests
+from clickhouse_connect.driver.exceptions import ProgrammingError
 from kafka import KafkaConsumer
 
 import demo  # noqa: F401  (UTF-8 console)
@@ -34,29 +35,29 @@ from demo import config as c
 RATE_WINDOW_SECONDS = 5
 
 
-class StatusFile:
-    """Trạng thái loader cho UI (API /api/flow đọc data/flow/<name>.json)."""
+class Reporter:
+    """Báo trạng thái lên engine qua Reporting API (POST /api/pipelines/{p}/components/{name})."""
 
-    def __init__(self, name: str, database: str):
-        c.FLOW_DIR.mkdir(parents=True, exist_ok=True)
-        self.path = c.FLOW_DIR / f"{name}.json"
-        self.data = {"name": name, "database": database, "state": "starting", "rows_per_sec": 0.0}
-        self.written_at = 0.0
+    def __init__(self, name: str, role: str, database: str):
+        self.url = f"{c.ENGINE_API}/api/pipelines/{c.PIPELINE_NAME}/components/{name}"
+        self.role = role
+        self.state, self.message = "starting", ""
+        self.metrics = {"target_table": f"{database}.{c.SOURCE_TABLE}"}
+        self.sent_at = 0.0
+        self.session = requests.Session()
 
-    def update(self, state: str, **fields) -> None:
-        changed = state != self.data["state"]
-        self.data.update(fields, state=state, updated_at=time.time())
-        if "held_columns" not in fields:
-            self.data.pop("held_columns", None)
-        if not changed and time.monotonic() - self.written_at < 1:
+    def update(self, state: str, message: str = "", **metrics) -> None:
+        changed = (state, message) != (self.state, self.message)
+        self.state, self.message = state, message
+        self.metrics.update(metrics)
+        if not changed and time.monotonic() - self.sent_at < 1:
             return
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.data, default=str), encoding="utf-8")
         try:
-            os.replace(tmp, self.path)
-        except PermissionError:
-            pass  # Windows: API đang mở file để đọc -> bỏ lượt này, ghi lại sau <=1s
-        self.written_at = time.monotonic()
+            self.session.post(self.url, timeout=2, json={
+                "state": state, "role": self.role, "metrics": self.metrics, "message": message})
+        except requests.RequestException:
+            pass  # engine tạm không liên lạc được: dữ liệu vẫn chảy, lần sau gửi lại
+        self.sent_at = time.monotonic()
 
 DECIMAL = "org.apache.kafka.connect.data.Decimal"
 EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -105,8 +106,15 @@ def parse_message(raw: bytes | None) -> dict | None:
     return {k: (decoders[k](v) if v is not None and k in decoders else v) for k, v in after.items()}
 
 
+def apply_renames(row: dict, renames: dict[str, str], target_columns: set[str]) -> dict:
+    """Message cũ còn mang tên cột đã được đổi (RENAME đã duyệt) -> ghi vào cột tên mới."""
+    if not renames:
+        return row
+    return {(renames[k] if k in renames and k not in target_columns else k): v for k, v in row.items()}
+
+
 class ClickHouseTable:
-    def __init__(self, client, table: str, status: StatusFile | None = None, gate=None):
+    def __init__(self, client, table: str, status: Reporter | None = None, gate=None):
         self.client, self.table, self.status, self.gate = client, table, status, gate
         self.columns: set[str] = set()
         self.refresh()
@@ -119,13 +127,27 @@ class ClickHouseTable:
         self.columns = {r[0] for r in res.result_rows}
 
     def write(self, rows: list[dict]) -> None:
-        # Gom theo tập cột: các message trước/sau một ALTER có cấu trúc khác nhau.
-        groups: dict[tuple, list[dict]] = {}
-        for r in rows:
-            groups.setdefault(tuple(r), []).append(r)
-        for cols, grp in groups.items():
-            self._wait_for_columns(set(cols))
-            self.client.insert(self.table, [[r[k] for k in cols] for r in grp], column_names=list(cols))
+        while True:
+            renames = self.gate.renames if self.gate else {}
+            # Gom theo tập cột (sau khi ánh xạ tên cột đã đổi): message trước/sau một ALTER khác cấu trúc.
+            groups: dict[tuple, list[dict]] = {}
+            for r in rows:
+                r = apply_renames(r, renames, self.columns)
+                groups.setdefault(tuple(r), []).append(r)
+            try:
+                for cols, grp in groups.items():
+                    self._wait_for_columns(set(cols))
+                    self.client.insert(self.table, [[r[k] for k in cols] for r in grp], column_names=list(cols))
+                return
+            except ProgrammingError as e:
+                if "Unrecognized column" not in str(e):
+                    raise
+                # Schema đích vừa đổi sau lần đọc trước (VD vừa duyệt RENAME): đọc lại rồi ghi lại cả lô.
+                # Nhóm đã ghi sẽ bị ghi trùng -> ReplacingMergeTree gộp lại (at-least-once).
+                print(f"[loader] target schema changed ({e}) -> refreshing and retrying the batch")
+                self.refresh()
+                if self.gate:
+                    self.gate.check()
 
     def _wait_for_columns(self, needed: set[str]) -> None:
         missing = needed - self.columns
@@ -137,7 +159,8 @@ class ClickHouseTable:
             if self.status:
                 # Đích thiếu cột VÌ bảng đang chờ duyệt (VD rename) -> báo "paused" để UI hiện nút duyệt.
                 frozen = self.gate is not None and self.gate.check()
-                self.status.update("paused" if frozen else "hold", held_columns=sorted(missing), rows_per_sec=0.0)
+                self.status.update("paused" if frozen else "hold", rows_per_sec=0.0,
+                                   message=f"target is missing columns {sorted(missing)} — waiting for the engine to add them")
             if time.monotonic() >= next_log:
                 print(f"[loader] HOLD: bảng đích chưa có cột {sorted(missing)} "
                       f"-> chờ engine đồng bộ schema ({time.monotonic() - started:.0f}s)")
@@ -156,19 +179,32 @@ class ClickHouseTable:
 
 
 class FreezeGate:
-    """Đọc trạng thái freeze của bảng trong Schema Registry do engine ghi."""
+    """Hỏi engine qua Gate API (GET /api/gate/{pipeline}/{table}) bảng có đang bị freeze không."""
 
-    def __init__(self, status: StatusFile):
-        from src.schema_evolution.core import SchemaRegistry
-        self.registry = SchemaRegistry(c.REGISTRY_DIR)
+    def __init__(self, status: Reporter):
+        self.url = f"{c.ENGINE_API}/api/gate/{c.PIPELINE_NAME}/{c.SOURCE_TABLE}"
+        self.session = requests.Session()
         self.frozen = False
+        self.renames: dict[str, str] = {}  # RENAME đã duyệt: tên cũ -> tên mới
+        self.unreachable = False
         self.status = status
 
     def check(self) -> bool:
         try:
-            self.frozen = self.registry.is_frozen(c.REGISTRY_KEY)
-        except (ValueError, OSError):
-            pass  # engine đang ghi dở file registry -> giữ trạng thái cũ, đọc lại lượt sau
+            resp = self.session.get(self.url, timeout=2)
+            resp.raise_for_status()
+            gate = resp.json()
+            self.frozen = gate["state"] == "frozen"
+            self.renames = gate.get("column_renames") or {}
+            if self.unreachable:
+                print("[loader] Gate API reachable again")
+            self.unreachable = False
+        except (requests.RequestException, ValueError, KeyError) as e:
+            # Fail-static: giữ trạng thái đã biết gần nhất. HOLD (cột lạ) vẫn bảo vệ dữ liệu khi engine vắng mặt.
+            if not self.unreachable:
+                print(f"[loader] Gate API unreachable ({e}) -> keeping last known state: "
+                      f"{'frozen' if self.frozen else 'open'}")
+            self.unreachable = True
         return self.frozen
 
     def wait_until_open(self) -> None:
@@ -176,7 +212,8 @@ class FreezeGate:
             return
         started = next_log = time.monotonic()
         while self.check():
-            self.status.update("paused", rows_per_sec=0.0)
+            self.status.update("paused", message="table frozen: breaking change awaiting approval — data kept in Kafka",
+                               rows_per_sec=0.0)
             if time.monotonic() >= next_log:
                 print(f"[loader] PAUSE: bảng {c.REGISTRY_KEY} đang bị freeze (thay đổi breaking chờ duyệt) "
                       f"-> dừng ghi, dữ liệu giữ trong Kafka ({time.monotonic() - started:.0f}s)")
@@ -192,7 +229,7 @@ def main():
     database = c.CH_NAIVE_DATABASE if naive else c.CH_DATABASE
     name = "naive-loader" if naive else "loader"
 
-    status = StatusFile(name, database)
+    status = Reporter(name, "baseline sink (no engine)" if naive else "warehouse sink", database)
     client = clickhouse_connect.get_client(**c.CH, database=database)
     gate = None if naive else FreezeGate(status)
     table = ClickHouseTable(client, c.SOURCE_TABLE, status, gate)
@@ -219,7 +256,7 @@ def main():
                     table.write_naive(rows)
                 except Exception as e:
                     error = f"{type(e).__name__}: {str(e).strip().splitlines()[0][:300]}"
-                    status.update("failed", error=error, rows_per_sec=0.0)
+                    status.update("failed", message=error, rows_per_sec=0.0)
                     print(f"[{name}] FAILED: {error}")
                     print(f"[{name}] task dừng hẳn — warehouse {database} không nhận thêm dữ liệu nào nữa.")
                     sys.exit(1)
@@ -236,7 +273,8 @@ def main():
         now = time.monotonic()
         while window and now - window[0][0] > RATE_WINDOW_SECONDS:
             window.popleft()
-        status.update("running", rows_per_sec=round(sum(n for _, n in window) / RATE_WINDOW_SECONDS, 1))
+        status.update("running", rows_per_sec=round(sum(n for _, n in window) / RATE_WINDOW_SECONDS, 1),
+                      lag_seconds=round(last_lag, 2) if last_lag is not None else None)
         if now - last_report >= 5:
             lag = f"{last_lag:.2f}s" if last_lag is not None else "-"
             print(f"[{name}] {loaded / (now - last_report):6.1f} row/s | e2e lag {lag}")

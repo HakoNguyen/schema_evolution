@@ -3,7 +3,9 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-FLOW_DIR = ROOT / "data" / "flow"  # loader ghi trạng thái ở đây, API /api/flow đọc
+
+# Demo chỉ nói chuyện với engine qua HTTP (Gate API + Reporting API), không đọc file nội bộ của engine.
+ENGINE_API = os.getenv("DEMO_ENGINE_API", "http://localhost:8000")
 
 PG = {
     "host": os.getenv("DEMO_PG_HOST", "localhost"),

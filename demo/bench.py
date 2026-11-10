@@ -15,10 +15,11 @@ from datetime import datetime, timezone
 
 import clickhouse_connect
 import psycopg2
+import requests
 
 import demo  # noqa: F401  (UTF-8 console)
 from demo import config as c
-from demo.check import loader_status, reconcile
+from demo.check import reconcile
 from demo.scenario import STEPS, run_step
 
 RESULTS_DIR = c.ROOT / "demo" / "results"
@@ -87,6 +88,15 @@ def bench_schema(runs: int, timeout: float) -> None:
                      "failures": failures, "reconcile_after": rec})
 
 
+def _loader_state() -> str:
+    """Trạng thái loader lấy từ engine (Reporting API), như mọi client khác."""
+    try:
+        comps = requests.get(f"{c.ENGINE_API}/api/pipelines/{c.PIPELINE_NAME}/components", timeout=2).json()
+        return next((x["state"] for x in comps if x["name"] == "loader"), "?")
+    except (requests.RequestException, ValueError):
+        return "?"
+
+
 def bench_soak(minutes: float, interval: float) -> None:
     pg, ch = _clients()
     samples = []
@@ -103,7 +113,7 @@ def bench_soak(minutes: float, interval: float) -> None:
             continue
         if rec:
             first = first or rec
-            state = loader_status().get("loader", {}).get("state", "?")
+            state = _loader_state()
             samples.append({"t": round(time.monotonic() - start, 1), "lag": rec["lag_seconds"],
                             "lost": rec["lost_rows"], "warehouse_total": rec["warehouse_total"], "loader": state})
         if time.monotonic() >= next_report and samples:

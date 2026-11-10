@@ -1,22 +1,20 @@
 """
-Đối chiếu nguồn và đích: số dòng, mất dòng, độ trễ. Dùng chung cho CLI và API /api/flow.
+Đối chiếu nguồn và đích: số dòng, mất dòng, độ trễ.
 
-    python -m demo.check            # 1 lần
-    python -m demo.check --watch    # cập nhật mỗi 2s
+    python -m demo.check                     # 1 lần
+    python -m demo.check --watch             # cập nhật mỗi 2s
+    python -m demo.check --watch --report    # + báo lên engine (Reporting API) để hiện trên UI
 """
 import argparse
-import json
-import threading
 import time
 from datetime import datetime, timezone
 
 import clickhouse_connect
 import psycopg2
+import requests
 
 import demo  # noqa: F401  (UTF-8 console)
 from demo import config as c
-
-STALE_SECONDS = 5  # loader không cập nhật trạng thái quá lâu -> coi như đã dừng
 
 
 def _utc(dt: datetime | None) -> datetime | None:
@@ -68,49 +66,29 @@ def reconcile(pg, ch) -> dict | None:
     }
 
 
-def latest_prices(ch) -> list[dict]:
-    rows = ch.query(
-        f"SELECT symbol, argMax(price, trade_time), max(trade_time) FROM {c.SOURCE_TABLE} "
-        f"GROUP BY symbol ORDER BY symbol"
-    ).result_rows
-    return [{"symbol": s, "price": str(p.normalize()), "time": _utc(t).isoformat()} for s, p, t in rows]
-
-
-def loader_status() -> dict:
-    out = {}
-    for name in ("loader", "naive-loader"):
-        try:
-            st = json.loads((c.FLOW_DIR / f"{name}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue  # chưa chạy, hoặc loader đang ghi dở file
-        if st.get("state") != "failed" and time.time() - st.get("updated_at", 0) > STALE_SECONDS:
-            st["state"] = "stopped"
-        out[name] = st
-    return out
-
-
-_lock = threading.Lock()
-_clients: dict = {}
-
-
-def flow_snapshot() -> dict:
-    """Toàn bộ số liệu cho trang Data Flow (API /api/flow). Giữ kết nối giữa các lần gọi."""
-    with _lock:
-        try:
-            if "pg" not in _clients or _clients["pg"].closed:
-                _clients["pg"] = psycopg2.connect(**c.PG, connect_timeout=3)
-            if "ch" not in _clients:
-                _clients["ch"] = clickhouse_connect.get_client(**c.CH, database=c.CH_DATABASE)
-            pg, ch = _clients["pg"], _clients["ch"]
-            return {
-                "pipeline": c.PIPELINE_NAME,
-                "reconcile": reconcile(pg, ch),
-                "prices": latest_prices(ch),
-                "loaders": loader_status(),
-            }
-        except Exception:
-            _clients.clear()  # kết nối hỏng (DB vừa reset...) -> lần sau mở lại
-            raise
+def report(r: dict | None) -> None:
+    """Báo kết quả đối chiếu lên engine như một thành phần ("reconciler") qua Reporting API."""
+    if r is None:
+        return
+    metrics = {
+        "source_rows": r["source_total"],
+        "warehouse_rows": r["warehouse_total"],
+        "lost_rows": r["lost_rows"],
+        "lag_seconds": round(r["lag_seconds"], 2),
+    }
+    if r["naive"]:
+        metrics["baseline_rows_not_delivered"] = r["naive"]["missing_rows"]
+    mark = datetime.fromisoformat(r["mark"])
+    try:
+        requests.post(f"{c.ENGINE_API}/api/pipelines/{c.PIPELINE_NAME}/components/reconciler", timeout=2, json={
+            "state": "ok" if r["lost_rows"] == 0 else "error",
+            "role": "source vs warehouse reconciliation",
+            "metrics": metrics,
+            "message": f"verified up to {mark:%H:%M:%S}: {r['source_upto_mark']:,} source = "
+                       f"{r['warehouse_upto_mark']:,} warehouse rows",
+        })
+    except requests.RequestException:
+        pass  # engine tạm không liên lạc được: vẫn in ra console
 
 
 def format_line(r: dict | None) -> str:
@@ -132,11 +110,15 @@ def format_line(r: dict | None) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--watch", action="store_true")
+    ap.add_argument("--report", action="store_true", help="báo kết quả lên engine qua Reporting API")
     args = ap.parse_args()
     pg = psycopg2.connect(**c.PG)
     ch = clickhouse_connect.get_client(**c.CH, database=c.CH_DATABASE)
     while True:
-        print(format_line(reconcile(pg, ch)), flush=True)
+        r = reconcile(pg, ch)
+        print(format_line(r), flush=True)
+        if args.report:
+            report(r)
         if not args.watch:
             return
         time.sleep(2)

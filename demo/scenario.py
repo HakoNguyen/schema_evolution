@@ -15,10 +15,10 @@ import time
 
 import clickhouse_connect
 import psycopg2
+import requests
 
 import demo  # noqa: F401  (UTF-8 console)
 from demo import config as c
-from src.schema_evolution.core import SchemaRegistry
 
 STEPS = {
     "add_column": dict(
@@ -63,11 +63,21 @@ def run(step: str, timeout: float) -> float | None:
     return run_step(step, STEPS[step], timeout)
 
 
+def _gate(session: requests.Session) -> dict | None:
+    """Trạng thái bảng qua Gate API của engine (None nếu engine tạm không trả lời)."""
+    try:
+        resp = session.get(f"{c.ENGINE_API}/api/gate/{c.PIPELINE_NAME}/{c.SOURCE_TABLE}", timeout=2)
+        resp.raise_for_status()
+        return resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+
+
 def run_step(step: str, s: dict, timeout: float) -> float | None:
     """Chạy SQL của bước trên nguồn, trả về số giây tới khi engine phản ứng (None = quá timeout)."""
     print(f"\n▶ {step}: {s['story']}\n  SQL: {s['sql']}")
     ch = clickhouse_connect.get_client(**c.CH)
-    registry = SchemaRegistry(c.REGISTRY_DIR)
+    session = requests.Session()
 
     pg = psycopg2.connect(**c.PG)
     pg.autocommit = True
@@ -78,30 +88,20 @@ def run_step(step: str, s: dict, timeout: float) -> float | None:
     pg.close()
 
     while time.monotonic() - t0 < timeout:
-        if s["expect"] == "clear":
-            try:
-                frozen = registry.is_frozen(c.REGISTRY_KEY)
-            except ValueError:
-                frozen = True  # registry đang được ghi dở -> đọc lại
-            if not frozen:
-                dt = time.monotonic() - t0
-                print(f"  ✓ nguồn đã khớp baseline, engine gỡ freeze sau {dt:.2f}s, loader chạy tiếp")
-                return dt
-        elif s["expect"] == "target":
+        if s["expect"] == "target":
             typ = _target_type(ch, s["column"])
             if typ and s.get("type_contains", "") in typ:
                 dt = time.monotonic() - t0
                 print(f"  ✓ NON-BREAKING: warehouse tự đồng bộ ({s['column']} {typ}) sau {dt:.2f}s, luồng dữ liệu không dừng")
                 return dt
-        else:
-            try:
-                frozen = registry.is_frozen(c.REGISTRY_KEY)
-            except ValueError:
-                frozen = False  # registry đang được ghi dở
-            if frozen:
+        elif (gate := _gate(session)) is not None:
+            if s["expect"] == "clear" and gate["state"] == "open":
                 dt = time.monotonic() - t0
-                draft = registry.load_draft(c.REGISTRY_KEY) or {}
-                changes = ", ".join(f"{x['change_type']}({x.get('column_name')})" for x in draft.get("breaking_changes", []))
+                print(f"  ✓ nguồn đã khớp baseline, engine gỡ freeze sau {dt:.2f}s, loader chạy tiếp")
+                return dt
+            if s["expect"] == "frozen" and gate["state"] == "frozen":
+                dt = time.monotonic() - t0
+                changes = ", ".join(f"{x['change_type']}({x['column']})" for x in gate["pending_changes"])
                 print(f"  ⛔ BREAKING: bảng bị freeze sau {dt:.2f}s [{changes}] -> loader tạm dừng, chờ duyệt trên UI")
                 return dt
         time.sleep(0.1)

@@ -41,8 +41,8 @@ $source = if ($Replay) { "--replay '$Replay'" } else { '' }
 Open-Window 'ingestor' "& '$py' -m demo.ingestor $source"
 Open-Window 'loader' "& '$py' -m demo.loader"
 Open-Window 'naive-loader' "& '$py' -m demo.loader --naive"
-Open-Window 'check' "& '$py' -m demo.check --watch"
+Open-Window 'check' "& '$py' -m demo.check --watch --report"
 
 Write-Host ''
-Write-Host 'Wait ~60s for the consumer groups to settle, then open http://localhost:5173 (Live Data Flow).'
+Write-Host 'Wait ~60s for the consumer groups to settle, then open http://localhost:5173 (Pipelines Overview).'
 Write-Host 'Scenario steps: python -m demo.scenario add_column | widen | rename | narrow | rollback'
