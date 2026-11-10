@@ -209,7 +209,7 @@ def get_tables():
         source_type = pair.get("source", {}).get("type", "unknown")
         target_type = pair.get("target", {}).get("type", "none")
         is_sync = "target" in pair and target_type not in (None, "none")
-        mode = f"Đồng bộ {source_type.upper()} → {target_type.upper()}" if is_sync else f"Chỉ theo dõi Nguồn ({source_type.upper()})"
+        mode = f"{source_type.upper()} → {target_type.upper()}" if is_sync else f"{source_type.upper()} (source only)"
 
 
         
@@ -317,7 +317,7 @@ def approve_changes(registry_key: str):
 
     has_target = bool(pair_config.get("target"))
     if has_target and not registry.sandbox_passed(registry_key):
-        return {"status": "error", "message": "Chưa chạy Sandbox test thành công cho bản nháp này."}
+        return {"status": "error", "message": "Run a successful sandbox test for this draft first."}
 
     target_engine = None
     try:
@@ -325,7 +325,7 @@ def approve_changes(registry_key: str):
     except Exception as e:
         # Pair có target mà không kết nối được: không approve, giữ frozen,
         # tránh để Registry lệch so với target thật.
-        return {"status": "error", "message": f"Không kết nối được target DB: {e}"}
+        return {"status": "error", "message": f"Cannot connect to target database: {e}"}
 
     try:
         result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key)
@@ -335,9 +335,9 @@ def approve_changes(registry_key: str):
 
     if result["status"] != "approved":
         message = {
-            "failed": "Áp dụng DDL lên target thất bại: " + "; ".join(result.get("errors", [])),
-            "not_frozen": "Bảng không ở trạng thái chờ duyệt.",
-            "no_draft": "Không tìm thấy bản nháp.",
+            "failed": "Applying DDL on target failed: " + "; ".join(result.get("errors", [])),
+            "not_frozen": "Table is not pending approval.",
+            "no_draft": "Draft not found.",
         }.get(result["status"], result["status"])
         return {"status": "error", "message": message, "result": _summarize_result(result)}
 
@@ -370,7 +370,7 @@ def reject_changes(registry_key: str):
     with registry.lock(registry_key):
         rejected = registry.reject_change(registry_key)
     if not rejected:
-        return {"status": "error", "message": "Không tìm thấy bản nháp để từ chối."}
+        return {"status": "error", "message": "No draft to reject."}
     notifier.notify_change_reviewed(
         table_name, approved=False, pair_name=pair_name
     )
@@ -439,9 +439,9 @@ def update_system_config(payload: dict):
     try:
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.dump(payload, f, allow_unicode=True, default_flow_style=False)
-        return {"status": "success", "message": "Cấu hình hệ thống đã được lưu vào config/main.yaml"}
+        return {"status": "success", "message": "Saved config/main.yaml"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Không thể lưu main.yaml: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cannot save main.yaml: {str(e)}")
 
 @app.get("/api/config/pipelines")
 def get_pipelines_config():
@@ -461,7 +461,7 @@ def get_pipelines_config():
 def create_pipeline_config(payload: dict):
     name = payload.get("name")
     if not name:
-        raise HTTPException(status_code=400, detail="Thiếu tên pipeline (name)")
+        raise HTTPException(status_code=400, detail="Missing pipeline name")
     
     clean_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
     
@@ -472,9 +472,9 @@ def create_pipeline_config(payload: dict):
     try:
         with open(target_file, "w", encoding="utf-8") as f:
             yaml.dump(clean_payload, f, allow_unicode=True, default_flow_style=False)
-        return {"status": "success", "filename": target_file.name, "message": f"Đã lưu pipeline vào {target_file.name}"}
+        return {"status": "success", "filename": target_file.name, "message": f"Saved {target_file.name}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Không thể tạo pipeline yaml: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cannot create pipeline YAML: {str(e)}")
 
 @app.put("/api/config/pipelines/{name}")
 def update_pipeline_config(name: str, payload: dict):
@@ -486,9 +486,9 @@ def update_pipeline_config(name: str, payload: dict):
     try:
         with open(target_file, "w", encoding="utf-8") as f:
             yaml.dump(clean_payload, f, allow_unicode=True, default_flow_style=False)
-        return {"status": "success", "filename": target_file.name, "message": f"Đã cập nhật pipeline {target_file.name}"}
+        return {"status": "success", "filename": target_file.name, "message": f"Updated {target_file.name}"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Không thể cập nhật pipeline yaml: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Cannot update pipeline YAML: {str(e)}")
 
 @app.delete("/api/config/pipelines/{name}")
 def delete_pipeline_config(name: str):
@@ -496,7 +496,7 @@ def delete_pipeline_config(name: str):
     target_file = pipelines_dir / f"{name}.yaml"
     if target_file.exists():
         target_file.unlink()
-        return {"status": "success", "message": f"Đã xóa pipeline {name}.yaml"}
-    raise HTTPException(status_code=404, detail=f"Không tìm thấy file {name}.yaml")
+        return {"status": "success", "message": f"Deleted {name}.yaml"}
+    raise HTTPException(status_code=404, detail=f"{name}.yaml not found")
 
 

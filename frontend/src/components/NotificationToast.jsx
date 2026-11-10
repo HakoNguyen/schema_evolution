@@ -55,7 +55,7 @@ export function ToastProvider({ children }) {
             ? 'var(--danger-color)' 
             : isWarning 
             ? 'var(--warning-color)' 
-            : 'var(--primary-color)';
+            : 'var(--text-dim)';
 
           const iconColor = borderColor;
 
@@ -69,10 +69,10 @@ export function ToastProvider({ children }) {
                 gap: '12px',
                 padding: '14px 16px',
                 borderRadius: '8px',
-                background: bgColor,
+                background: 'var(--card-bg)',
                 border: '1px solid var(--border-color)',
-                borderLeft: `4px solid ${borderColor}`,
-                boxShadow: '0 10px 25px rgba(0,0,0,0.15)',
+                borderLeft: `3px solid ${borderColor}`,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
                 color: 'var(--text-main)',
                 fontSize: '0.875rem',
                 fontWeight: 500,

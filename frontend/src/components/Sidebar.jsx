@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, Network, Zap, LayoutTemplate, Sliders } from 'lucide-react';
+import { Database, Network, Zap, LayoutTemplate, Sliders, GitBranch } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 export default function Sidebar({ activePage, setActivePage }) {
@@ -16,7 +16,7 @@ export default function Sidebar({ activePage, setActivePage }) {
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h2>Schema Evolution</h2>
+        <h2><span className="brand-mark"><GitBranch size={13} /></span>Schema Evolution</h2>
       </div>
 
       <div className="sidebar-section">
@@ -28,8 +28,8 @@ export default function Sidebar({ activePage, setActivePage }) {
               className={`table-item ${activePage === item.id ? 'active' : ''}`}
               onClick={() => setActivePage(item.id)}
             >
-              <div className="table-icon" style={{ opacity: activePage === item.id ? 1 : 0.7 }}>
-                {item.icon}
+              <div className="table-icon">
+                {React.cloneElement(item.icon, { size: 16 })}
               </div>
               <div className="table-info">
                 <div className="table-name">{item.label}</div>

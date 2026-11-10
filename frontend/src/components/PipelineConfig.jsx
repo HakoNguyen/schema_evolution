@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sliders, Server, Plus, Edit2, Trash2, X, Save, RefreshCw, Layers, Search } from 'lucide-react';
+import { Sliders, Server, Plus, Edit2, Trash2, X, Save, RefreshCw, Layers, Search, Zap, Clock } from 'lucide-react';
 import { useToast } from './NotificationToast';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -45,7 +45,7 @@ export default function PipelineConfig() {
     })
     .catch(err => {
       console.error("Lỗi khi tải cấu hình:", err);
-      addToast("Không thể tải thông tin cấu hình từ API", "error");
+      addToast(t('err_load_config'), "error");
     })
     .finally(() => setLoading(false));
   };
@@ -137,11 +137,11 @@ export default function PipelineConfig() {
       body: JSON.stringify(payload)
     })
     .then(res => {
-      if (!res.ok) throw new Error("Lỗi khi lưu pipeline");
+      if (!res.ok) throw new Error(t('toast_action_failed'));
       return res.json();
     })
     .then(data => {
-      addToast(data.message || "Đã lưu cấu hình pipeline thành công!", "success");
+      addToast(t('toast_saved'), "success");
       setShowModal(false);
       fetchConfigs();
     })
@@ -152,15 +152,15 @@ export default function PipelineConfig() {
   };
 
   const handleDeletePipeline = (name) => {
-    if (!window.confirm(`Bạn có chắc chắn muốn xóa file cấu hình config/pipelines/${name}.yaml?`)) return;
+    if (!window.confirm(`${t('confirm_delete')} config/pipelines/${name}.yaml?`)) return;
 
     fetch(`/api/config/pipelines/${name}`, { method: 'DELETE' })
       .then(res => {
-        if (!res.ok) throw new Error("Không thể xóa file pipeline");
+        if (!res.ok) throw new Error(t('toast_action_failed'));
         return res.json();
       })
       .then(data => {
-        addToast(data.message || `Đã xóa pipeline ${name}`, "info");
+        addToast(`${t('toast_deleted')}: ${name}`, "info");
         fetchConfigs();
       })
       .catch(err => {
@@ -176,11 +176,11 @@ export default function PipelineConfig() {
       body: JSON.stringify(systemConfig)
     })
     .then(res => {
-      if (!res.ok) throw new Error("Không thể cập nhật system config");
+      if (!res.ok) throw new Error(t('toast_action_failed'));
       return res.json();
     })
     .then(data => {
-      addToast(data.message || "Đã lưu main.yaml!", "success");
+      addToast(t('toast_saved'), "success");
       fetchConfigs();
     })
     .catch(err => {
@@ -201,7 +201,7 @@ export default function PipelineConfig() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Sliders style={{ color: 'var(--primary-color)' }} /> {t('config_title')}
+            <Sliders size={18} style={{ color: 'var(--text-dim)' }} /> {t('config_title')}
           </h2>
           <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             {t('config_sub')}
@@ -215,8 +215,8 @@ export default function PipelineConfig() {
               padding: '6px 16px',
               borderRadius: '6px',
               border: 'none',
-              background: activeSubTab === 'pipelines' ? 'var(--primary-color)' : 'transparent',
-              color: activeSubTab === 'pipelines' ? '#0b0f17' : 'var(--text-muted)',
+              background: activeSubTab === 'pipelines' ? 'var(--card-hover)' : 'transparent',
+              color: activeSubTab === 'pipelines' ? 'var(--text-main)' : 'var(--text-muted)',
               cursor: 'pointer',
               fontWeight: 600,
               fontSize: '0.85rem'
@@ -230,8 +230,8 @@ export default function PipelineConfig() {
               padding: '6px 16px',
               borderRadius: '6px',
               border: 'none',
-              background: activeSubTab === 'system' ? 'var(--primary-color)' : 'transparent',
-              color: activeSubTab === 'system' ? '#0b0f17' : 'var(--text-muted)',
+              background: activeSubTab === 'system' ? 'var(--card-hover)' : 'transparent',
+              color: activeSubTab === 'system' ? 'var(--text-main)' : 'var(--text-muted)',
               cursor: 'pointer',
               fontWeight: 600,
               fontSize: '0.85rem'
@@ -248,7 +248,7 @@ export default function PipelineConfig() {
         /* TAB 1: SYSTEM CONFIG (main.yaml) */
         <div style={{ background: 'var(--card-bg)', padding: '24px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: 0, marginBottom: '20px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Server size={18} style={{ color: 'var(--primary-color)' }} /> {t('system_config_title')}
+            <Server size={16} style={{ color: 'var(--text-dim)' }} /> {t('system_config_title')}
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -375,7 +375,7 @@ export default function PipelineConfig() {
             <button
               onClick={() => openModal(null)}
               className="btn-primary"
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success-color)', color: '#fff' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary-color)', color: 'var(--primary-fg)' }}
             >
               <Plus size={16} /> {t('add_new_pipeline')}
             </button>
@@ -400,53 +400,41 @@ export default function PipelineConfig() {
                   <tr key={pipe.name}>
                     <td>
                       <div>
-                        <strong style={{ color: 'var(--primary-color)', fontSize: '0.9rem' }}>{pipe.name}</strong>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                          <code>{pipe._filename || `${pipe.name}.yaml`}</code>
-                        </div>
+                        <div style={{ fontWeight: 500 }}>{pipe.name}</div>
+                        <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{pipe._filename || `${pipe.name}.yaml`}</code>
                       </div>
                     </td>
                     <td>
-                      {pipe.detection?.mode === 'event_driven' ? (
-                        <div>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f59e0b', background: '#f59e0b1f', padding: '3px 8px', borderRadius: '4px', border: '1px solid #f59e0b40', textTransform: 'uppercase' }}>
-                            {t('event_driven_kafka')}
-                          </span>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            Topic: <code>{pipe.detection?.kafka?.topic || pipe.name}</code>
-                          </div>
-                        </div>
+                      <span className="pill">
+                        {pipe.detection?.mode === 'event_driven' ? <Zap size={11} /> : <Clock size={11} />}
+                        {pipe.detection?.mode === 'event_driven' ? 'Kafka CDC' : 'Polling'}
+                      </span>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '4px' }}>
+                        {pipe.detection?.mode === 'event_driven'
+                          ? <>topic <code>{pipe.detection?.kafka?.topic || pipe.name}</code></>
+                          : t('periodic_scan')}
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 500, fontSize: '0.8rem', textTransform: 'uppercase' }}>{pipe.source?.type}</div>
+                      <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                        {pipe.source?.config?.host}:{pipe.source?.config?.port}/{pipe.source?.config?.database || pipe.source?.config?.dbname}
+                      </code>
+                    </td>
+                    <td>
+                      {pipe.target?.type && pipe.target?.type !== 'none' ? (
+                        <>
+                          <div style={{ fontWeight: 500, fontSize: '0.8rem', textTransform: 'uppercase' }}>{pipe.target.type}</div>
+                          <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{pipe.target?.config?.host || 'localhost'}:{pipe.target?.config?.port}</code>
+                        </>
                       ) : (
-                        <div>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#3b82f6', background: '#3b82f61f', padding: '3px 8px', borderRadius: '4px', border: '1px solid #3b82f640', textTransform: 'uppercase' }}>
-                            {t('polling_scanner')}
-                          </span>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            {t('periodic_scan')}
-                          </div>
-                        </div>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>{t('source_only')}</span>
                       )}
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--success-color)', background: 'var(--success-bg)', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--success-border)', textTransform: 'uppercase' }}>
-                        {pipe.source?.type}
-                      </span>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {pipe.source?.config?.host}:{pipe.source?.config?.port} ({pipe.source?.config?.database})
-                      </div>
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: pipe.target?.type && pipe.target?.type !== 'none' ? 'var(--warning-color)' : 'var(--primary-color)', background: pipe.target?.type && pipe.target?.type !== 'none' ? 'var(--warning-bg)' : 'var(--primary-bg)', padding: '3px 8px', borderRadius: '4px', border: pipe.target?.type && pipe.target?.type !== 'none' ? '1px solid var(--warning-border)' : '1px solid var(--primary-border)', textTransform: 'uppercase' }}>
-                        {pipe.target?.type && pipe.target?.type !== 'none' ? pipe.target.type : `SELF-MONITOR (${pipe.source?.type?.toUpperCase()})`}
-                      </span>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {pipe.target?.type && pipe.target?.type !== 'none' ? `${pipe.target?.config?.host || 'localhost'}` : t('source_only')}
-                      </div>
                     </td>
                     <td>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {pipe.tables?.map(tItem => (
-                          <span key={tItem} style={{ background: 'var(--body-bg)', color: 'var(--primary-color)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.75rem' }}>
+                          <span key={tItem} className="pill" style={{ fontFamily: 'var(--mono)', borderRadius: '4px' }}>
                             {tItem}
                           </span>
                         ))}
@@ -463,7 +451,7 @@ export default function PipelineConfig() {
                         </button>
                         <button
                           onClick={() => handleDeletePipeline(pipe.name)}
-                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: 'var(--danger-bg)', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                          className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.8rem', color: 'var(--danger-color)', display: 'flex', alignItems: 'center', gap: '4px' }}
                         >
                           <Trash2 size={12} /> {t('delete_btn')}
                         </button>
@@ -672,7 +660,7 @@ export default function PipelineConfig() {
                 <button
                   type="submit"
                   className="btn-primary"
-                  style={{ background: 'var(--success-color)', color: '#fff' }}
+                  style={{ background: 'var(--primary-color)', color: 'var(--primary-fg)' }}
                 >
                   {editingPipeline ? t('save_changes_btn') : t('create_file_btn')}
                 </button>

@@ -32,7 +32,7 @@ export default function LiveEventStream({ onReviewTable }) {
       <div style={{ padding: '20px 24px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card-bg)' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Zap style={{ color: 'var(--primary-color)' }} size={20} /> {t('live_stream_title')}
+            <Zap style={{ color: 'var(--text-dim)' }} size={16} /> {t('live_stream_title')}
           </h3>
           <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
             {t('live_stream_sub')}
@@ -58,7 +58,7 @@ export default function LiveEventStream({ onReviewTable }) {
       <div style={{ padding: '20px' }}>
         {events.length === 0 ? (
           <div className="no-data" style={{ padding: '28px', minHeight: '180px' }}>
-            <Activity size={28} style={{ opacity: 0.3, marginBottom: '10px', color: 'var(--primary-color)' }} className="spin" />
+            <Activity size={22} style={{ marginBottom: '10px', color: 'var(--text-dim)' }} />
             <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>
               {t('listening_events')}
             </div>
@@ -75,8 +75,8 @@ export default function LiveEventStream({ onReviewTable }) {
               return (
                 <div key={idx} style={{
                   background: 'var(--body-bg)',
-                  border: isBreaking ? '1px solid var(--danger-border)' : isNonBreaking ? '1px solid var(--success-border)' : '1px solid var(--border-color)',
-                  borderLeft: isBreaking ? '4px solid var(--danger-color)' : isNonBreaking ? '4px solid var(--success-color)' : '4px solid var(--primary-color)',
+                  border: '1px solid var(--border-color)',
+                  borderLeft: isBreaking ? '3px solid var(--warning-color)' : isNonBreaking ? '3px solid var(--success-color)' : '3px solid var(--border-subtle)',
                   borderRadius: '8px',
                   padding: '14px 18px',
                   display: 'flex',
@@ -90,14 +90,14 @@ export default function LiveEventStream({ onReviewTable }) {
                         fontWeight: 700,
                         padding: '2px 8px',
                         borderRadius: '4px',
-                        textTransform: 'uppercase',
-                        background: isBreaking ? 'var(--danger-bg)' : 'var(--success-bg)',
-                        color: isBreaking ? 'var(--danger-color)' : 'var(--success-color)'
+                        textTransform: 'none',
+                        background: isBreaking ? 'var(--warning-bg)' : 'var(--success-bg)',
+                        color: isBreaking ? 'var(--warning-color)' : 'var(--success-color)'
                       }}>
                         {isBreaking ? t('requires_approval') : t('auto_synced_badge')}
                       </span>
                       <strong style={{ color: 'var(--text-main)', fontSize: '0.9rem' }}>{evt.table || evt.table_name || 'CDC Event'}</strong>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Pipeline: <code style={{ color: 'var(--primary-color)' }}>{evt.pipeline || 'default'}</code></span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}><code style={{ color: 'var(--text-dim)' }}>{evt.pipeline || 'default'}</code></span>
                     </div>
 
                     <div style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
@@ -109,7 +109,7 @@ export default function LiveEventStream({ onReviewTable }) {
                     {isBreaking && onReviewTable && (
                       <button
                         className="btn-outline"
-                        style={{ padding: '5px 12px', fontSize: '0.78rem', fontWeight: 600, color: 'var(--danger-color)', borderColor: 'var(--danger-border)' }}
+                        style={{ padding: '5px 12px', fontSize: '0.78rem', fontWeight: 500 }}
                         onClick={() => onReviewTable(`${evt.pipeline}/${evt.table || evt.table_name}`)}
                       >
                         {t('review_approve')}

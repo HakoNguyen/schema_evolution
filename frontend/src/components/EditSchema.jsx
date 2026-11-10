@@ -32,7 +32,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
       })
       .catch(err => {
         console.error("Error fetching schema for edit", err);
-        addToast("Không thể tải thông tin cấu trúc cột từ server", "error");
+        addToast(t('err_load_details'), "error");
       })
       .finally(() => setLoading(false));
   }, [selectedKey]);
@@ -65,13 +65,13 @@ export default function EditSchema({ tables, onDeploySuccess }) {
       });
       const data = await res.json();
       if (data.status === 'success') {
-        addToast("Cấu trúc Schema đã được cập nhật và chuyển sang bản nháp chờ duyệt!", "success");
+        addToast(t('toast_schema_drafted'), "success");
         if (onDeploySuccess) onDeploySuccess();
       } else {
-        addToast("Lỗi cập nhật Schema: " + (data.message || "Thất bại"), "error");
+        addToast(`${t('toast_action_failed')}: ${data.message || ''}`, "error");
       }
     } catch (e) {
-      addToast("Lỗi kết nối server: " + e.message, "error");
+      addToast(`${t('toast_network_error')}: ${e.message}`, "error");
     } finally {
       setLoading(false);
     }
@@ -106,7 +106,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
             alignItems: 'center', 
             gap: '8px', 
             background: (!selectedKey || columns.length === 0) ? 'var(--border-subtle)' : 'var(--primary-color)', 
-            color: (!selectedKey || columns.length === 0) ? 'var(--text-muted)' : '#0b0f17',
+            color: (!selectedKey || columns.length === 0) ? 'var(--text-muted)' : 'var(--primary-fg)',
             opacity: (!selectedKey || columns.length === 0) ? 0.5 : 1,
             cursor: (!selectedKey || columns.length === 0) ? 'not-allowed' : 'pointer'
           }} 
@@ -120,7 +120,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
       <div style={{ padding: '20px' }}>
         {!selectedKey ? (
           <div className="no-data" style={{ padding: '28px', minHeight: '160px' }}>
-            <Database size={28} style={{ opacity: 0.3, marginBottom: '10px', color: 'var(--primary-color)' }} />
+            <Database size={22} style={{ marginBottom: '10px', color: 'var(--text-dim)' }} />
             <p style={{ fontSize: '0.875rem' }}>{t('no_table_selected')}</p>
           </div>
         ) : loading ? (
