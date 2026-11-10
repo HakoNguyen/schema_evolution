@@ -30,6 +30,19 @@ src_code_review.md
 
 plan/
 bytebase/bytebase-data/
+bytebase_demo/bytebase_data/
+
+# Demo database files (SQLite / H2)
+*.db
 
 # Registry lock files
 data/registry/**/*.lock
+
+# Research side-material (comparison demos & reports) — kept locally, not part of the core system
+atlas_demo/
+liquibase_demo/
+bytebase/
+bytebase_demo/
+kafkaconnect_demo/
+docs/*.md
+Dockerfile

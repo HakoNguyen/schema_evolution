@@ -34,8 +34,10 @@ In modern enterprise data platforms, backend developers frequently modify source
 
 ### The Solution: Schema Evolution Core Engine
 **Schema Evolution Core** acts as an automated, intelligent **Smart Gatekeeper**:
-- **Non-Breaking Changes (Adding Columns)**: Detects new fields in real-time CDC streams (<0.5s), infers datatypes, and automatically executes `ALTER TABLE target ADD COLUMN ...` on ClickHouse / MySQL target warehouses before data is inserted.
-- **Breaking Changes (Dropping / Narrowing Columns)**: Instantly **FREEZES** the affected table pipeline, isolates the change into a **Sandbox environment**, sends immediate alerts (Telegram / Slack), and requires human-in-the-loop Data Engineer approval.
+- **Non-Breaking Changes (Adding Columns, Widening Types)**: When a CDC event arrives (or the fallback scheduler fires), the engine re-crawls the source table metadata, diffs it against the Schema Registry baseline, and automatically executes `ALTER TABLE target ...` on the ClickHouse / MySQL / Postgres target.
+- **Breaking Changes (Dropping / Renaming / Narrowing Columns)**: Marks the table as **FROZEN in the Schema Registry**, stores the new schema as a draft, sends a Telegram alert, and waits for a Data Engineer to run a **Sandbox test** and approve or reject it. No DDL is executed on the target until approval.
+
+> **Scope note.** The engine governs the *schema* (control plane) only. It does **not** pause the data plane (SeaTunnel / Kafka Connect sinks), and control plane and data plane run in parallel — so there is no ordering guarantee that an auto `ALTER TABLE` lands before the first row carrying the new column reaches the target. A "frozen" table means "schema changes on hold", not "data ingestion stopped".
 
 ---
 
@@ -72,7 +74,8 @@ graph LR
     PG & MY & MG -->|Debezium CDC| K
 
     %% Parallel Control Plane Flow (DDL & Schema Evolution)
-    K -->|"DDL Events"| E
+    K -->|"CDC events (trigger re-crawl)"| E
+    E -.->|"crawl metadata"| PG & MY & MG
     E --> C
     C -->|"Non-Breaking"| AUTO
     C -->|"Breaking Risk"| FREEZE
@@ -112,8 +115,9 @@ graph LR
 - Automatic legacy file migration and pipeline metadata tracking.
 
 ### 3. Automated Risk Classification Engine
-- **NON-BREAKING**: Column additions, widening length, nullable conversions ➔ Auto-executed in **<0.5 seconds**.
-- **BREAKING**: Column drops, type narrowing, constraint changes ➔ Auto-frozen, saved to draft version, triggers Telegram alert.
+- **NON-BREAKING**: Nullable / defaulted column additions, widening (`varchar(50)→varchar(100)`, `int→bigint`, `numeric(10,2)→numeric(12,2)`), `NOT NULL→NULL`, dropping a foreign key ➔ DDL auto-executed on the target.
+- **BREAKING**: Column drops, renames (heuristic: one-to-one match of an identical column definition), narrowing (incl. unbounded `varchar→varchar(n)` and lost `numeric` precision/scale), incompatible type changes, `NULL→NOT NULL`, PK / FK changes ➔ table frozen in the registry, draft saved, Telegram alert.
+- Not yet detected: changes to a column's `DEFAULT` value.
 
 ### 4. Interactive Web Dashboard UI
 - **Task / Flow Monitor**: Namespace-qualified table monitoring (`pipeline / table`).
@@ -135,7 +139,9 @@ schema-evolution-core/
 │   ├── kafka_consumer.py        # Event-driven CDC Kafka Consumer Thread
 │   ├── payload_extractor.py     # Dynamic Payload Key Extractor & Type Inference
 │   ├── event_log.py             # In-memory Audit Trail Ring Buffer
-│   └── scheduler.py             # Periodic Baseline Scanner
+│   ├── scheduler.py             # Periodic Baseline Scanner
+│   ├── unfreeze_cli.py          # Terminal CLI: list / view / approve / reject
+│   └── app.py                   # Legacy Streamlit UI (registry-only)
 ├── config/                      # Config-as-Code Declarations
 │   ├── main.yaml                # Core System Configuration
 │   └── pipelines/               # Pipeline YAML Files (mongo_to_clickhouse, pg_to_mysql, etc.)
@@ -156,8 +162,11 @@ schema-evolution-core/
 │   ├── core.py                  # Evolution Engine & Registry Manager
 │   ├── engines/                 # Database Drivers (MySQL, Postgres, ClickHouse, Mongo)
 │   └── notification.py          # Telegram & Webhook Notifiers
-├── tests/                       # Automated Test Suites
-│   └── test_payload_pipeline.py # End-to-end CDC Payload Extractor Test
+├── tests/
+│   ├── test_type_classification.py # Unit: widen/narrow classification (no infra needed)
+│   ├── test_rename_heuristic.py    # Unit: rename detection + DDL generation (no infra needed)
+│   ├── benchmark_core.py           # Standalone micro-benchmark of the core library
+│   └── test_payload_pipeline.py    # Manual E2E script (needs the Docker stack running)
 └── docker-compose.yml           # Full Infrastructure Stack (Postgres, MySQL, Mongo, ClickHouse, Redpanda)
 ```
 
@@ -199,24 +208,15 @@ npm run dev
 ```
 Access the Web App Dashboard at: 👉 **`http://localhost:5173`**
 
-### 5. (Alternative) Professional Enterprise Terminal CLI
-In addition to the Web Dashboard and Telegram Bot, you can launch a clean, professional interactive terminal menu to inspect, approve, or reject schemas directly:
+### 5. (Alternative) Terminal CLI
+Review frozen tables without the Web UI:
 
 ```bash
-# Launch via convenient shortcut command
-schema-check
-
-# Or via Python module
-python -m app.cli
+python -m app.unfreeze_cli list                          # frozen tables pending approval
+python -m app.unfreeze_cli view    pg_to_mysql/customers # draft + breaking changes
+python -m app.unfreeze_cli approve pg_to_mysql/customers # apply DDL on target, unfreeze
+python -m app.unfreeze_cli reject  pg_to_mysql/customers # discard draft, keep baseline
 ```
-
-*Interactive Menu Options (0-6):*
-- `[1]` List All Monitored Tables & Active Baselines
-- `[2]` List Frozen Tables Pending Approval
-- `[3]` Inspect Draft DDL & Breaking Changes Details
-- `[4]` Approve Schema Change & Execute DDL on Target DB
-- `[5]` Reject Schema Change & Retain Previous Baseline
-- `[6]` View System Topology & Pipeline Configurations
 
 ---
 
@@ -235,6 +235,26 @@ python -m app.cli
 ---
 
 ## 🧪 Verification & Benchmark Results
+
+### Unit tests (no infrastructure needed)
+```bash
+python tests/test_type_classification.py
+python tests/test_rename_heuristic.py
+```
+
+### Reproducible micro-benchmark (core library only)
+Excludes Kafka, Debezium, SeaTunnel and all databases. Numbers depend on the machine.
+```bash
+python tests/benchmark_core.py
+```
+
+| Measurement | Workload | Result (dev laptop, Python 3.11) |
+| :--- | :--- | :--- |
+| `compare_schemas` latency | 30-column table, 3 diffs, 10,000 runs | ~80 µs / comparison |
+| Payload extractor latency | 9-field JSON CDC message, 50,000 runs | ~23 µs / message |
+
+### End-to-end demo (manual, one-off)
+Measured by hand on the development machine with the full Docker stack running; there is no automated harness that reproduces these numbers.
 
 | Test Scenario | Trigger Action | Measured Latency | Execution Outcome | Status |
 | :--- | :--- | :--- | :--- | :--- |

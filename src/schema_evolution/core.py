@@ -343,13 +343,26 @@ TYPE_TO_FAMILY: dict[str, str] = {
 }
 
 
+def _bound_grows(old: int | None, new: int | None) -> bool:
+    # None = không giới hạn: có giới hạn -> None là nới rộng, None -> có giới hạn là thu hẹp.
+    if new is None:
+        return True
+    return old is not None and new >= old
+
+
 def _classify_type_change(old_col: ColumnSchema, new_col: ColumnSchema) -> ChangeType:
     if old_col.data_type == new_col.data_type:
-        if old_col.max_length is not None and new_col.max_length is not None:
-            if new_col.max_length > old_col.max_length:
-                return ChangeType.WIDEN_TYPE
-            return ChangeType.NARROW_TYPE
-        return ChangeType.WIDEN_TYPE
+        # numeric(p,s): an toàn khi cả số chữ số phần nguyên (p-s) lẫn scale đều không giảm.
+        old_int = None if old_col.precision is None else old_col.precision - (old_col.scale or 0)
+        new_int = None if new_col.precision is None else new_col.precision - (new_col.scale or 0)
+        scale_ok = new_col.precision is None or (new_col.scale or 0) >= (old_col.scale or 0)
+        if (
+            _bound_grows(old_col.max_length, new_col.max_length)
+            and _bound_grows(old_int, new_int)
+            and scale_ok
+        ):
+            return ChangeType.WIDEN_TYPE
+        return ChangeType.NARROW_TYPE
 
     old_family = TYPE_TO_FAMILY.get(old_col.data_type)
     new_family = TYPE_TO_FAMILY.get(new_col.data_type)
@@ -465,6 +478,8 @@ def compare_schemas(old: TableSchema, new: TableSchema) -> list[SchemaChange]:
         type_changed = (
             old_col.data_type != new_col.data_type
             or old_col.max_length != new_col.max_length
+            or old_col.precision != new_col.precision
+            or old_col.scale != new_col.scale
         )
         if type_changed:
             change_type = _classify_type_change(old_col, new_col)
@@ -597,6 +612,8 @@ def _merge_schema(base: TableSchema, applied_changes: list[SchemaChange]) -> Tab
             if col is not None and change.new_value is not None:
                 col.data_type = change.new_value.data_type
                 col.max_length = change.new_value.max_length
+                col.precision = change.new_value.precision
+                col.scale = change.new_value.scale
         elif change.change_type == ChangeType.NOT_NULL_TO_NULLABLE:
             col = cols_by_name.get(change.column_name)
             if col is not None:
