@@ -30,6 +30,26 @@ def test_events_survive_restart():
     print("[PASS] test_events_survive_restart")
 
 
+def test_delete_and_clear_survive_restart():
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "events.jsonl"
+        log = EventLog()
+        log.persist_to(f)
+        ids = [log.add_event("p", "t", f"ddl {i}", "changes_applied")["id"] for i in range(3)]
+
+        assert log.delete(ids[1]) and not log.delete(999)
+        assert [e["id"] for e in log.get_events()] == [ids[2], ids[0]]
+        reloaded = EventLog()
+        reloaded.persist_to(f)  # khởi động lại: sự kiện đã xoá không quay lại
+        assert [e["id"] for e in reloaded.get_events()] == [ids[2], ids[0]]
+
+        log.clear()
+        assert log.get_events() == [] and f.read_text(encoding="utf-8") == ""
+        assert log.add_event("p", "t", "after", "changes_applied")["id"] == ids[2] + 1  # id không bị dùng lại
+    print("[PASS] test_delete_and_clear_survive_restart")
+
+
 if __name__ == "__main__":
     test_events_survive_restart()
+    test_delete_and_clear_survive_restart()
     print("\nALL EVENT LOG TESTS PASSED!")

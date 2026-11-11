@@ -183,6 +183,22 @@ def get_cdc_events():
     from app.event_log import event_logger
     return event_logger.get_events()
 
+
+# Live Events chỉ là nhật ký: xoá không đổi freeze, baseline hay bảng chờ duyệt. Khi bật auth: cần admin.
+@app.delete("/api/events/{event_id}")
+def delete_cdc_event(event_id: int):
+    from app.event_log import event_logger
+    if not event_logger.delete(event_id):
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+    return {"status": "success"}
+
+
+@app.delete("/api/events")
+def clear_cdc_events():
+    from app.event_log import event_logger
+    event_logger.clear()
+    return {"status": "success"}
+
 @app.get("/api/topology")
 def get_pipeline_topology():
     config = load_config()

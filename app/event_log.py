@@ -5,6 +5,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List
 
+from app.secret_store import atomic_write
+
 class EventLog:
     def __init__(self, max_size: int = 50):
         self._events = deque(maxlen=max_size)
@@ -61,9 +63,33 @@ class EventLog:
         with self._lock:
             return list(self._events)[:limit]
 
+    def delete(self, event_id: int) -> bool:
+        """Xoá 1 sự kiện khỏi lịch sử (chỉ là nhật ký: không đổi freeze/baseline). False nếu không thấy."""
+        with self._lock:
+            kept = [e for e in self._events if e.get("id") != event_id]
+            if len(kept) == len(self._events):
+                return False
+            self._events = deque(kept, maxlen=self._events.maxlen)
+            self._rewrite_file(lambda e: e.get("id") != event_id)
+            return True
+
     def clear(self) -> None:
         with self._lock:
             self._events.clear()
+            self._rewrite_file(lambda e: False)
+
+    def _rewrite_file(self, keep) -> None:
+        """Gọi khi đang giữ lock. File chỉ nối thêm khi ghi, nên xoá = ghi lại phần còn giữ."""
+        if self._path is None or not self._path.is_file():
+            return
+        kept = []
+        for line in self._path.read_text(encoding="utf-8").splitlines():
+            try:
+                if keep(json.loads(line)):
+                    kept.append(line + "\n")
+            except ValueError:
+                continue  # dòng ghi dở: bỏ luôn
+        atomic_write(self._path, "".join(kept))
 
 # Global singleton instance
 event_logger = EventLog()
