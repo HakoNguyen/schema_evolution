@@ -86,7 +86,8 @@ def test_ddl_generation_for_rename():
 
     assert pg_ddl[0] == expected_sql, f"PG DDL mismatch: {pg_ddl[0]}"
     assert mysql_ddl[0] == expected_sql, f"MySQL DDL mismatch: {mysql_ddl[0]}"
-    assert ch_ddl[0] == expected_sql, f"ClickHouse DDL mismatch: {ch_ddl[0]}"
+    # ClickHouse bọc tên cột trong backtick (cột kiểu unit-price không làm hỏng DDL).
+    assert ch_ddl[0] == "ALTER TABLE orders RENAME COLUMN `status_code` TO `order_status`", f"ClickHouse DDL mismatch: {ch_ddl[0]}"
     print("[PASS] test_ddl_generation_for_rename passed.")
 
 

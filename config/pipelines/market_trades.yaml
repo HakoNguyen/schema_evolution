@@ -1,0 +1,28 @@
+name: market_trades
+detection:
+  # Kafka consumer của engine chỉ crawl lại nguồn khi fingerprint schema trong message
+  # Debezium đổi (ADD/DROP/RENAME cột, đổi kiểu/precision/độ dài) -> phát hiện < 1-2s.
+  mode: event_driven
+  kafka:
+    bootstrap_servers: localhost:19092
+    topic: market
+  # Lưới an toàn: vẫn quét định kỳ phòng khi bỏ lỡ event (VD engine khởi động lại).
+  fallback_polling_interval_seconds: 60
+source:
+  type: postgres
+  config:
+    host: localhost
+    port: 5431
+    user: admin
+    password: ${EXCHANGE_PG_PASSWORD}   # giá trị thật: config/secrets.env
+    dbname: exchange
+target:
+  type: clickhouse
+  config:
+    host: localhost
+    port: 8123
+    user: default
+    password: ${ANALYTICS_CH_PASSWORD}
+    database: analytics
+tables:
+  - trades

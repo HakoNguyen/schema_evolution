@@ -39,21 +39,24 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
   const displaySchema = versionDetails ? versionDetails.schema : currentSchema;
   
   return (
-    <div style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '24px', color: 'var(--text-main)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 700, color: 'var(--text-main)' }}>
-          {t('schema_structure')} {versionDetails ? `(v${selectedVersion})` : `(${t('current_version')} v${details.version})`}
+    <div style={{ color: 'var(--text-main)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+        <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600 }}>
+          {t('schema_structure')}{' '}
+          <span style={{ color: 'var(--text-dim)', fontWeight: 400 }}>
+            {versionDetails ? `v${selectedVersion}` : `${t('current_version')} · v${details.version}`}
+          </span>
         </h3>
 
         {versions.length > 0 && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <History size={16} style={{ color: 'var(--primary-color)' }} />
-            <select 
-              value={selectedVersion || ''} 
+            <History size={14} style={{ color: 'var(--text-dim)' }} />
+            <select
+              value={selectedVersion || ''}
               onChange={e => setSelectedVersion(e.target.value === '' ? null : Number(e.target.value))}
               style={{
-                padding: '6px 12px',
-                background: 'var(--body-bg)',
+                padding: '5px 10px',
+                background: 'var(--card-bg)',
                 border: '1px solid var(--border-color)',
                 borderRadius: '6px',
                 color: 'var(--text-main)',
@@ -72,8 +75,14 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
         )}
       </div>
       
-      <div className="schema-table-wrapper" style={{ marginBottom: '20px' }}>
-        <table className="schema-table">
+      <div className="schema-table-wrapper" style={{ marginBottom: '12px' }}>
+        <table className="schema-table fixed">
+          <colgroup>
+            <col style={{ width: '40%' }} />
+            <col style={{ width: '22%' }} />
+            <col style={{ width: '16%' }} />
+            <col style={{ width: '22%' }} />
+          </colgroup>
           <thead>
             <tr>
               <th>{t('col_column_name')}</th>
@@ -85,30 +94,37 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
           <tbody>
             {displaySchema.columns.map(col => (
               <tr key={col.name}>
-                <td><strong style={{ color: 'var(--primary-color)' }}>{col.name}</strong></td>
-                <td><code>{col.data_type}{col.max_length ? `(${col.max_length})` : ''}</code></td>
-                <td>{col.nullable ? <span style={{ color: 'var(--success-color)' }}>✔ YES</span> : <span style={{ color: 'var(--danger-color)', fontWeight: 600 }}>✘ NOT NULL</span>}</td>
-                <td style={{ color: 'var(--text-muted)' }}>{col.default !== null ? col.default : '—'}</td>
+                <td>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 500 }}>
+                    {col.name}
+                    {displaySchema.primary_key?.includes(col.name) && <Key size={12} style={{ color: 'var(--text-dim)' }} aria-label="primary key" />}
+                  </span>
+                </td>
+                <td><code style={{ color: 'var(--text-muted)' }}>{col.data_type}{col.max_length ? `(${col.max_length})` : ''}</code></td>
+                <td style={{ color: col.nullable ? 'var(--text-dim)' : 'var(--text-muted)', fontSize: '0.8rem' }}>{col.nullable ? 'NULL' : 'NOT NULL'}</td>
+                <td style={{ color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {col.default !== null ? <code>{col.default}</code> : '—'}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
 
-      <div style={{ background: 'var(--body-bg)', padding: '16px', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
         {displaySchema.primary_key && displaySchema.primary_key.length > 0 && (
-          <div style={{ fontSize: '0.85rem', marginBottom: '8px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Key size={14} style={{ color: 'var(--warning-color)' }} />
-            <strong style={{ color: 'var(--warning-color)' }}>{t('primary_key_label')}</strong> <code style={{ color: 'var(--text-main)' }}>{displaySchema.primary_key.join(', ')}</code>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Key size={12} style={{ color: 'var(--text-dim)' }} />
+            <span>{t('primary_key_label')}</span> <code style={{ color: 'var(--text-main)' }}>{displaySchema.primary_key.join(', ')}</code>
           </div>
         )}
         {displaySchema.foreign_keys && displaySchema.foreign_keys.length > 0 && (
-          <div style={{ fontSize: '0.85rem', color: 'var(--text-main)' }}>
-            <strong style={{ color: 'var(--primary-color)' }}>{t('foreign_keys_label')}</strong>
+          <div>
+            <span>{t('foreign_keys_label')}</span>
             <ul style={{ marginTop: '6px', paddingLeft: '20px' }}>
               {displaySchema.foreign_keys.map((fk, idx) => (
                 <li key={idx} style={{ marginBottom: '4px' }}>
-                  <code style={{ color: 'var(--primary-color)' }}>{fk.column_name}</code> → <code style={{ color: 'var(--primary-color)' }}>{fk.ref_table}.{fk.ref_column}</code> 
+                  <code style={{ color: 'var(--text-main)' }}>{fk.column_name}</code> → <code style={{ color: 'var(--text-main)' }}>{fk.ref_table}.{fk.ref_column}</code>
                   {fk.on_delete && ` (ON DELETE ${fk.on_delete})`}
                 </li>
               ))}

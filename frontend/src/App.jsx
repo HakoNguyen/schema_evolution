@@ -7,12 +7,14 @@ import EditSchema from './components/EditSchema';
 import PipelineTopology from './components/PipelineTopology';
 import LiveEventStream from './components/LiveEventStream';
 import PipelineConfig from './components/PipelineConfig';
+import PipelinesOverview from './components/PipelinesOverview';
 import { useToast } from './components/NotificationToast';
 import { useLanguage } from './context/LanguageContext';
+import { Languages, Sun, Moon, ArrowLeft } from 'lucide-react';
 
 function App() {
   const [tables, setTables] = useState([]);
-  const [activePage, setActivePage] = useState('monitored_tables'); // 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
+  const [activePage, setActivePage] = useState('data_flow'); // 'data_flow' | 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
   const [selectedKey, setSelectedKey] = useState(null);
   const [details, setDetails] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -28,7 +30,7 @@ function App() {
       .then(data => setTables(data))
       .catch(err => {
         console.error("Error fetching tables", err);
-        addToast("Không thể tải danh sách bảng từ backend API", "error");
+        addToast(t('err_load_tables'), "error");
       });
   };
 
@@ -49,23 +51,26 @@ function App() {
       .then(data => setDetails(data))
       .catch(err => {
         console.error("Error fetching details", err);
-        addToast("Không thể tải chi tiết bảng dữ liệu", "error");
+        addToast(t('err_load_details'), "error");
       });
   }, [selectedKey, refreshTrigger]);
 
   const selectedTable = selectedKey ? tables.find(t => t.registry_key === selectedKey) : null;
 
-  const [theme, setTheme] = useState('dark');
+  const [theme, setTheme] = useState(() => {
+    try {
+      const saved = localStorage.getItem('theme');
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch { /* storage unavailable */ }
+    return window.matchMedia?.('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+  });
 
-  const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    if (nextTheme === 'light') {
-      document.body.classList.add('theme-light');
-    } else {
-      document.body.classList.remove('theme-light');
-    }
-  };
+  useEffect(() => {
+    document.body.classList.toggle('theme-light', theme === 'light');
+    try { localStorage.setItem('theme', theme); } catch { /* storage unavailable */ }
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
 
   return (
     <div className="app-container">
@@ -82,6 +87,7 @@ function App() {
           <div className="header-breadcrumbs">
             <span>{t('clusters')}</span> / 
             {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> {t('monitored_tables')}</span>}
+            {activePage === 'data_flow' && <span className="highlight"> {t('overview')}</span>}
             {activePage === 'pipeline_topology' && <span className="highlight"> {t('pipeline_topology')}</span>}
             {activePage === 'live_events' && <span className="highlight"> {t('live_cdc_stream')}</span>}
             {activePage === 'pipeline_config' && <span className="highlight"> {t('pipeline_config')}</span>}
@@ -94,42 +100,27 @@ function App() {
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <button 
-              className="btn-outline"
-              onClick={toggleLanguage}
-              style={{ 
-                fontSize: '0.8rem', 
-                padding: '5px 12px', 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '6px',
-                fontWeight: 600,
-                color: 'var(--primary-color)',
-                borderColor: 'var(--primary-border)'
-              }}
-            >
-              {lang === 'en' ? '🌐 English' : '🌐 Tiếng Việt'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button className="icon-btn" onClick={toggleLanguage}>
+              <Languages size={14} /> {lang === 'en' ? 'EN' : 'VI'}
             </button>
-
-            <button 
-              className="btn-outline"
+            <button
+              className="icon-btn"
               onClick={toggleTheme}
-              style={{ 
-                fontSize: '0.8rem', 
-                padding: '5px 12px', 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: '6px',
-                fontWeight: 600
-              }}
+              aria-label={theme === 'dark' ? t('light_mode') : t('dark_mode')}
+              title={theme === 'dark' ? t('light_mode') : t('dark_mode')}
             >
-              {theme === 'dark' ? t('light_mode') : t('dark_mode')}
+              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
             </button>
           </div>
         </header>
 
         <div className="content-scroll">
+          {/* PAGE: Pipelines Overview (mọi pipeline, mọi thành phần tự báo cáo) */}
+          {activePage === 'data_flow' && (
+            <PipelinesOverview onReview={(key) => { setActivePage('monitored_tables'); setSelectedKey(key); setRefreshTrigger(p => p + 1); }} />
+          )}
+
           {/* PAGE: Pipeline Topology */}
           {activePage === 'pipeline_topology' && <PipelineTopology />}
 
@@ -164,34 +155,24 @@ function App() {
 
           {/* PAGE: Table Details */}
           {activePage === 'monitored_tables' && selectedKey && selectedTable && (
-            <>
-              <button 
-                className="btn-outline" 
-                style={{ marginBottom: '24px', display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 12px' }}
+            <div>
+              <button
+                className="icon-btn"
+                style={{ marginBottom: '20px' }}
                 onClick={() => setSelectedKey(null)}
               >
-                {t('back_to_list')}
+                <ArrowLeft size={14} /> {t('back_to_list')}
               </button>
 
-              <div className="metrics-row">
-                <div className="metric-card">
-                  <div className="metric-label">TABLE</div>
-                  <div className="metric-value">{selectedTable.table_name}</div>
-                </div>
-                <div className="metric-card">
-                  <div className="metric-label">VERSION</div>
-                  <div className="metric-value">{details?.version || '—'}</div>
-                </div>
-                <div className="metric-card">
-                  <div className="metric-label">STATUS</div>
-                  <div className="metric-value">
-                    {selectedTable.is_frozen ? (
-                      <span className="status-frozen">Pending Approval</span>
-                    ) : (
-                      <span className="status-normal">Healthy</span>
-                    )}
-                  </div>
-                </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap', marginBottom: '20px' }}>
+                <h1 style={{ fontSize: '1.4rem', fontWeight: 600, letterSpacing: '-0.02em' }}>{selectedTable.table_name}</h1>
+                <code style={{ color: 'var(--text-dim)' }}>{selectedTable.registry_key}</code>
+                <span className="pill">v{details?.version || '—'}</span>
+                {selectedTable.is_frozen ? (
+                  <span className="pill warning"><span className="dot" /> {t('pending_approval')}</span>
+                ) : (
+                  <span className="pill success"><span className="dot" /> {t('healthy')}</span>
+                )}
               </div>
 
               {selectedTable.is_frozen && (
@@ -209,7 +190,7 @@ function App() {
                 details={details}
                 refreshDetails={() => setRefreshTrigger(prev => prev + 1)}
               />
-            </>
+            </div>
           )}
         </div>
       </div>

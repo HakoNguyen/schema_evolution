@@ -48,7 +48,39 @@ def test_merge_keeps_widened_precision():
     print("[PASS] test_merge_keeps_widened_precision")
 
 
+def test_target_types_are_lossless():
+    from src.schema_evolution.engines.clickhouse import ClickHouseEngine
+    from src.schema_evolution.engines.mysql import MySQLEngine
+    ch, my = ClickHouseEngine({})._render_type, MySQLEngine({})._render_type
+    assert ch(ColumnSchema("t", "timestamp", False)) == "DateTime64(6)"
+    assert ch(ColumnSchema("t", "timestamptz", True)) == "Nullable(DateTime64(6, 'UTC'))"
+    assert ch(ColumnSchema("n", "numeric", True)) == "Nullable(Decimal(76, 38))"   # trước đây Float64
+    assert ch(ColumnSchema("n", "numeric", False, precision=18, scale=8)) == "Decimal(18,8)"
+    assert my(ColumnSchema("t", "timestamptz", False)) == "DATETIME(6)"
+    assert my(ColumnSchema("n", "numeric", False)) == "DECIMAL(65,30)"              # trước đây DECIMAL = (10,0)
+    assert my(ColumnSchema("n", "numeric", False, precision=10, scale=2)) == "DECIMAL(10,2)"
+    print("[PASS] test_target_types_are_lossless")
+
+
+def test_source_quirks_found_on_live_dbs():
+    from src.schema_evolution.engines.mysql import MySQLEngine
+    from src.schema_evolution.engines.mongo import _merge_types
+    from src.schema_evolution.engines.base import render_portable_default
+    norm = MySQLEngine({})._normalize_type
+    assert norm("int", "int unsigned") == "bigint"          # 4294967295 không còn thành -1
+    assert norm("bigint", "bigint unsigned") == "numeric"
+    assert norm("tinyint", "tinyint(1)") == "boolean" and norm("mediumint", "mediumint") == "int"
+    assert render_portable_default("CURRENT_TIMESTAMP(6)", now_sql="now()") == "now()"
+    assert _merge_types({"int", "bigint"}) == "bigint" and _merge_types({"int", "double"}) == "double"
+    assert _merge_types({"int", "text"}) == "json"
+    from src.schema_evolution.engines.clickhouse import ClickHouseEngine
+    assert ClickHouseEngine({})._render_type(ColumnSchema("d", "date", False)) == "Date32"
+    print("[PASS] test_source_quirks_found_on_live_dbs")
+
+
 if __name__ == "__main__":
+    test_source_quirks_found_on_live_dbs()
+    test_target_types_are_lossless()
     test_varchar_length()
     test_numeric_precision_scale()
     test_merge_keeps_widened_precision()

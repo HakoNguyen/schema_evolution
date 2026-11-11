@@ -8,3 +8,5 @@ clickhouse-connect
 kafka-python
 fastapi
 uvicorn
+websockets
+crc32c  # kafka-python verifies CRC32C per batch; without this C extension it falls back to pure Python (~300 msg/s instead of ~12k)

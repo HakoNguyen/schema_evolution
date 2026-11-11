@@ -10,8 +10,9 @@ kafka:
   # security_protocol: "SASL_PLAINTEXT"
   # sasl_mechanism: "PLAIN"
   # sasl_plain_username: "username"
-  # sasl_plain_password: "password"
+  # sasl_plain_password: "${KAFKA_SASL_PASSWORD}"
 
-telegram: 
-  bot_token: ""  # đặt qua biến môi trường TELEGRAM_BOT_TOKEN
-  chat_id: "8074160008"
+# Giá trị thật nằm trong config/secrets.env (gitignored) hoặc biến môi trường cùng tên.
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"

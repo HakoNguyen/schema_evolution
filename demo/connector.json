@@ -1,0 +1,18 @@
+{
+  "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+  "tasks.max": "1",
+  "database.hostname": "postgres_db",
+  "database.port": "5432",
+  "database.user": "admin",
+  "database.password": "password123",
+  "database.dbname": "exchange",
+  "topic.prefix": "market",
+  "plugin.name": "pgoutput",
+  "slot.name": "market_slot",
+  "publication.name": "market_pub",
+  "publication.autocreate.mode": "filtered",
+  "table.include.list": "public.trades,public.tickers",
+  "decimal.handling.mode": "precise",
+  "column.propagate.source.type": ".*",
+  "tombstones.on.delete": "false"
+}

@@ -7,6 +7,8 @@ from typing import Any, Optional
 _PG_CAST_RE = re.compile(r"::[\w\s\"\[\]]+(\(\d+(,\s*\d+)?\))?$")
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 _NOW_DEFAULTS = {"current_timestamp", "now()", "current_timestamp()", "localtimestamp"}
+# MySQL: CURRENT_TIMESTAMP(6), NOW(3)... (có độ chính xác) - trước đây bị coi là chuỗi '...'.
+_NOW_FN_RE = re.compile(r"^(current_timestamp|now|localtimestamp)\(\d*\)$", re.IGNORECASE)
 
 
 def render_portable_default(raw: Any, now_sql: str = "CURRENT_TIMESTAMP") -> Optional[str]:
@@ -27,7 +29,7 @@ def render_portable_default(raw: Any, now_sql: str = "CURRENT_TIMESTAMP") -> Opt
     s = _PG_CAST_RE.sub("", s).strip()
     if s.startswith("(") and s.endswith(")") and s.count("(") == 1:
         s = s[1:-1].strip()
-    if s.lower() in _NOW_DEFAULTS:
+    if s.lower() in _NOW_DEFAULTS or _NOW_FN_RE.match(s):
         return now_sql
     if s.lower() in ("true", "false") or _NUMBER_RE.match(s):
         return s

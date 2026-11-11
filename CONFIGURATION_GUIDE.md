@@ -26,7 +26,7 @@ Nếu bạn muốn hệ thống theo dõi thêm một bảng mới trên một D
    - orders
 +  - products
 ```
-**Bước 3:** Lưu file. Hệ thống (Scheduler) sẽ tự động nhận diện và cập nhật cấu trúc bảng mới lên giao diện Web ở chu kỳ quét tiếp theo (mặc định 60s).
+**Bước 3:** Lưu file. Trong khoảng 3 giây, engine tự nạp lại pipeline và bắt đầu theo dõi bảng mới, không cần khởi động lại.
 
 ---
 
@@ -48,7 +48,7 @@ source:
     host: "192.168.1.100"
     port: 3306
     user: "admin"
-    password: "secret_password"
+    password: "${PROD_MYSQL_PASSWORD}"   # giá trị thật trong config/secrets.env (xem mục Bí mật)
     database: "production_db"
 
 # 2. CẤU HÌNH DATABASE ĐÍCH (Tuỳ chọn)
@@ -65,12 +65,89 @@ target:
 
 # 3. DANH SÁCH BẢNG CẦN THEO DÕI
 tables:
-  - users
-  - payments
+  - users                       # bảng đích cùng tên
+  - sales.orders                # Postgres: schema khác public -> bảng đích "orders"
+  - source: sales.order_items   # bảng đích đặt tên khác nguồn
+    target: order_items_raw
+
+# 4. CÁCH PHÁT HIỆN THAY ĐỔI (tuỳ chọn, mặc định polling theo scheduler.interval_seconds)
+detection:
+  mode: polling
+  interval_seconds: 300         # chu kỳ quét riêng của pipeline này
 ```
 
+**Engine không tạo bảng đích.** Lúc khai báo pipeline, bảng đích phải có sẵn và khớp nguồn (việc nạp dữ liệu ban đầu là của ETL). Lần quét đầu tiên engine lấy schema nguồn hiện tại làm baseline (v1), từ đó mới theo dõi thay đổi.
+
+Tên bảng chỉ gồm chữ, số, `_ $ -` và tối đa một dấu chấm (`schema.table`), vì tên đi thẳng vào câu DDL. Hai bảng nguồn không được đổ vào cùng một bảng đích.
+
+**Kiểu dữ liệu khi tự đồng bộ không làm mất dữ liệu.** Đã kiểm chứng trên Postgres, MySQL và Mongo thật:
+
+| Nguồn | ClickHouse | MySQL (đích) | Lý do |
+|---|---|---|---|
+| `TIMESTAMP`, `TIMESTAMPTZ`, `DATETIME(n)` | `DateTime64(6)`, `DateTime64(6, 'UTC')` | `DATETIME(6)` | Giữ micro giây (`DateTime` thường làm mất phần dưới giây) |
+| `NUMERIC` không ghi precision | `Decimal(76, 38)` | `DECIMAL(65,30)` | `Float64` làm tròn tiền; `DECIMAL` thường của MySQL là `(10,0)` |
+| `DATE` | `Date32` | `DATE` | `Date` của ClickHouse chỉ từ năm 1970 |
+| `CHAR(n)`, `VARCHAR(n)` | `String` | giữ nguyên | `FixedString(n)` đếm byte nên cắt chữ tiếng Việt |
+| MySQL `INT UNSIGNED`, `BIGINT UNSIGNED` | `Int64`, `Decimal(20,0)` | | Lên kiểu có dấu rộng hơn một bậc, không tràn số |
+
+Nếu DDL tự động chạy lỗi trên đích (sai quyền, kiểu không chuyển được), bảng **bị freeze và có cảnh báo** như một thay đổi breaking. Engine không báo "đã đồng bộ" khi đích thật ra chưa đổi.
+
+**Nguồn MongoDB (không có schema):** kiểu cột được suy ra từ 10.000 document mới nhất. Field không có trong mẫu **không** bị coi là đã xóa, và mẫu toàn số nhỏ **không** bị coi là thu hẹp kiểu, nên không có freeze giả. Field là object/array lồng nhau được lưu dạng chuỗi JSON; field con mới bên trong không được theo dõi riêng.
+
 > [!TIP]
-> Bạn không cần khởi động lại API server. `scheduler.py` sẽ tự động phát hiện file `.yaml` mới của bạn và bắt đầu đồng bộ ngay lập tức!
+> Không cần khởi động lại API server. **PipelineManager** ([`app/pipeline_manager.py`](app/pipeline_manager.py)) quét `config/pipelines/` mỗi 3 giây:
+> - **File mới:** bắt đầu theo dõi. **File bị sửa:** nạp lại pipeline đó. **File bị xoá:** dừng theo dõi.
+> - Mỗi pipeline chạy trên **worker riêng** (luồng xử lý và kết nối DB riêng). Pipeline A lỗi (DB sập, cấu hình sai) không ảnh hưởng pipeline B.
+> - **File cấu hình lỗi** (YAML hỏng, `type` không hỗ trợ, thiếu `tables`, trùng `name`) chỉ khiến pipeline đó không được theo dõi. Lỗi hiện trên trang Topology và Configuration kèm lý do cụ thể.
+
+### Bí mật (mật khẩu DB, token Telegram, mật khẩu Kafka SASL)
+
+**Không ghi bí mật thật vào file YAML**, vì các file này được commit lên git. Làm giống Docker Compose và Kafka Connect: trong YAML chỉ ghi **tham chiếu**, còn giá trị thật để ở chỗ khác.
+
+```yaml
+# config/pipelines/market_trades.yaml  (được commit)
+source:
+  config:
+    password: ${EXCHANGE_PG_PASSWORD}
+```
+```ini
+# config/secrets.env  (đã gitignore — copy từ config/secrets.env.example)
+EXCHANGE_PG_PASSWORD=password123
+TELEGRAM_BOT_TOKEN=123456:ABC...
+```
+
+- **Thứ tự ưu tiên:** biến môi trường thật cùng tên, rồi đến `config/secrets.env`. Trên server, đặt biến môi trường là đủ, không cần file.
+- **Engine chỉ thay giá trị thật lúc tạo kết nối.** Giá trị thật không bao giờ bị ghi ngược ra YAML, và API/UI chỉ thấy `${...}`.
+- **Thiếu biến** (ví dụ chưa khai báo `EXCHANGE_PG_PASSWORD`): chỉ pipeline đó báo lỗi `missing secret(s): ...`, các pipeline khác vẫn chạy. Khi lưu qua UI, tham chiếu tới biến chưa có cũng bị chặn.
+- **Sửa `secrets.env` có hiệu lực trong khoảng 3 giây**, không cần khởi động lại. Chỉ những pipeline dùng biến vừa đổi mới được nạp lại.
+- **Gõ mật khẩu thật trên Web UI cũng an toàn:** khi lưu, API tự chuyển giá trị vào `config/secrets.env` và YAML chỉ nhận tham chiếu. Tên biến theo vị trí: pipeline `shop_sales` + `source.config.password` thành `${SHOP_SALES_SOURCE_PASSWORD}`; `telegram.bot_token` trong `main.yaml` thành `${TELEGRAM_BOT_TOKEN}`. Lưu lại chỗ đó thì cập nhật đúng biến đó. Xóa pipeline thì biến vẫn nằm lại trong `secrets.env`, cần dọn tay.
+- **Bí mật viết thẳng trong YAML kiểu cũ** vẫn chạy được, UI hiện `********`. Lần lưu tiếp theo qua UI sẽ chuyển nó sang `secrets.env`.
+
+### Sửa cấu hình qua Web UI (trang Configuration)
+
+Mọi thao tác Lưu đều được **kiểm tra trước khi ghi file**, bằng đúng bộ luật mà engine dùng khi nạp cấu hình. Cấu hình sai thì không ghi, và form liệt kê từng lỗi, ví dụ `source.config.host: required` hay `target.config.port: required for clickhouse`.
+
+- **Thông tin kết nối được kiểm tra theo từng engine:** Postgres dùng `dbname` (chấp nhận `database` như tên cũ, nhưng không được có cả hai), MySQL/ClickHouse/Mongo dùng `database`, ClickHouse và Mongo bắt buộc có `port`.
+- **Form chỉ ghi đè những trường nó hiển thị.** Mọi trường khác trong file (ví dụ `bootstrap_servers`, `fallback_polling_interval_seconds`, tham số kết nối riêng) được giữ nguyên.
+- **Không đổi được tên pipeline**, vì lịch sử schema và trạng thái freeze được lưu theo tên. Muốn đổi tên thì tạo pipeline mới rồi xóa pipeline cũ.
+- **Tên pipeline** chỉ gồm chữ, số, `_` và `-` (tên được dùng làm tên file, nên chặn các ký tự như `../`). Không cho tạo trùng tên với pipeline đã có.
+- **File được ghi nguyên tử** (ghi ra file tạm rồi đổi tên), nên engine không bao giờ đọc phải file đang ghi dở.
+- Hạn chế: lưu qua UI sẽ **làm mất các dòng comment** trong file YAML. Muốn giữ comment thì sửa trực tiếp trong file.
+
+### Cấu hình nào tự áp dụng, cấu hình nào cần khởi động lại
+
+Theo cách Prometheus, Nginx và Airflow làm, cấu hình được chia hai loại: **runtime** (áp dụng trong khoảng 3 giây, không cần khởi động lại) và **bootstrap** (gắn với nơi lưu trữ trạng thái, phải khởi động lại).
+
+| Cấu hình | Loại | Khi bạn sửa và lưu file |
+|---|---|---|
+| `config/pipelines/*.yaml` | runtime | Pipeline mới chạy, pipeline sửa nạp lại, pipeline xoá dừng |
+| `main.yaml` → `telegram` | runtime | Dùng token/chat mới ngay, không động tới worker |
+| `main.yaml` → `kafka`, `scheduler` | runtime | Các worker và Kafka consumer khởi động lại với giá trị mới. `scheduler.interval_seconds` là chu kỳ mặc định cho pipeline `polling` không khai báo `detection.interval_seconds`; pipeline `event_driven` dùng `fallback_polling_interval_seconds` của riêng nó |
+| `main.yaml` → `registry.dir` | **bootstrap** | **Không áp dụng** khi đang chạy (đổi chỗ lưu trạng thái giữa chừng có thể làm mất trạng thái freeze/draft). UI báo "needs a restart". Khởi động lại backend để áp dụng |
+
+**File mới bị lỗi thì giữ cấu hình cũ (last-known-good):** nếu `main.yaml` bị gõ hỏng, engine **tiếp tục chạy bằng cấu hình hợp lệ gần nhất**, và UI hiện thẻ "main: Config error" kèm lý do. Sửa lại file là lỗi tự biến mất. Lúc **khởi động** mà `main.yaml` đã lỗi thì engine dừng và báo lỗi rõ ràng, vì khi đó chưa có cấu hình nào chạy tốt để giữ lại.
+
+**Khởi động lại backend** (chỉ cần khi đổi `registry.dir`): vào terminal đang chạy `uvicorn api.main:app --port 8000` (cửa sổ tên **backend** nếu dùng `demo\start.ps1`), bấm **Ctrl+C**, rồi chạy lại lệnh đó. Dữ liệu không mất, nhưng mất khoảng 30 đến 60 giây đầu để Kafka consumer ổn định lại.
 
 > [!WARNING]
 > Lưu ý từ khoá tên Database giữa các Engine:
@@ -104,9 +181,13 @@ Nếu hệ thống của bạn cần đồng bộ dữ liệu từ **nhiều c�
 
 ```yaml
 name: "pg_to_mysql"
-kafka:
-  bootstrap_servers: "192.168.1.50:9092"   # Trỏ riêng tới Kafka Cluster của chi nhánh
-  group_id: "pg-cluster-group"
+detection:
+  mode: event_driven
+  kafka:                                     # phải nằm TRONG detection (đặt ở ngoài sẽ bị bỏ qua)
+    bootstrap_servers: "192.168.1.50:9092"   # Trỏ riêng tới Kafka Cluster của chi nhánh
+    group_id: "pg-cluster-group"
+    topic: "pg_to_mysql"                     # = topic.prefix của Debezium connector
+  fallback_polling_interval_seconds: 60      # vẫn quét định kỳ phòng khi lỡ event
 
 source:
   type: "postgres"
@@ -114,9 +195,42 @@ source:
 ```
 
 > [!NOTE]
-> Khi chạy `python -m app.kafka_consumer`, hệ thống sẽ tự động phân nhóm và khởi tạo các **Thread Worker độc lập** để lắng nghe song song đồng thời từ tất cả các Kafka Cluster mà bạn đã khai báo!
+> Engine tạo **một Kafka consumer cho mỗi cluster**. Consumer chỉ chuyển message tới worker của pipeline tương ứng, việc kiểm tra schema chạy trong worker đó. Vì vậy một pipeline chậm không làm chậm các pipeline khác dùng chung cluster. Thêm hoặc bớt pipeline thì consumer tự cập nhật danh sách topic. Nhiều pipeline có thể dùng chung một `topic` (cùng một Debezium connector): message được chuyển tới **mọi** pipeline có khai báo bảng đó trong `tables`, pipeline không khai báo thì bỏ qua.
 
-### C. Khởi chạy Kafka Consumer Background Worker
+> [!IMPORTANT]
+> **Message phải là JSON** (`value.converter=org.apache.kafka.connect.json.JsonConverter`). Nên bật `value.converter.schemas.enable=true`: khi đó cả thay đổi kiểu (độ dài, precision) cũng được phát hiện trong khoảng 2 giây. Không có schema thì chỉ thêm, xóa, đổi tên cột được phát hiện ngay; đổi kiểu phải chờ lần quét dự phòng. Avro/Protobuf (Schema Registry) chưa được hỗ trợ: engine ghi **một** cảnh báo cho mỗi topic và topic đó chỉ còn được phát hiện qua quét dự phòng.
+
+**Lịch sử sự kiện** (Live CDC Event Stream, các lần Approve/Reject) được lưu vào `<registry.dir>/_events.jsonl`, nên khởi động lại backend không mất timeline.
+
+### C. Chạy engine
+Engine tự chạy cùng API server (`uvicorn api.main:app --port 8000`). Muốn chạy engine độc lập, không kèm API:
 ```powershell
-python -m app.kafka_consumer
+python -m app.scheduler   # PipelineManager: quét định kỳ + Kafka consumer cho mọi pipeline
 ```
+
+---
+
+## 4. Tích hợp data plane (loader, Kafka Connect, Spark job...)
+
+Engine chỉ quản lý **schema** (control plane). Thành phần ghi dữ liệu (data plane) do bạn tự chọn, và giao tiếp với engine qua 2 API. Engine không cần biết bên trong các thành phần đó.
+
+### Gate API: được ghi hay phải dừng?
+```http
+GET /api/gate/{pipeline}/{table}
+→ {"state": "open" | "frozen", "schema_version": 3,
+   "pending_changes": [{"change_type": "rename_column", "column": "qty"}],
+   "column_renames": {"qty": "quantity"}}
+```
+- `frozen`: có thay đổi breaking đang chờ duyệt. **Dừng ghi** bảng đó (giữ dữ liệu trong hàng đợi, không commit offset) cho tới khi trạng thái trở về `open`.
+- `column_renames`: các lần đổi tên đã duyệt. Message cũ còn trong hàng đợi vẫn mang tên cột cũ, nên phải ghi vào cột tên mới.
+- Không gọi được API thì nên **giữ trạng thái đã biết gần nhất** (fail-static).
+
+### Reporting API: báo trạng thái để hiện trên UI (không bắt buộc)
+```http
+POST /api/pipelines/{pipeline}/components/{name}
+{"state": "running", "role": "warehouse sink",
+ "metrics": {"rows_per_sec": 512.3, "lag_seconds": 1.6}, "message": ""}
+```
+- `state` gợi ý: `running` / `ok` (xanh), `hold` / `paused` (vàng), `failed` / `error` (đỏ). Thành phần im lặng quá 15 giây sẽ hiện là `stale`.
+- `metrics`: tối đa 30 giá trị đơn (số, chuỗi, bool). Trang **Pipelines Overview** hiển thị nguyên các giá trị này; chỉ số `rows_per_sec` có thêm sparkline.
+- Ví dụ hoàn chỉnh: [`demo/loader.py`](demo/loader.py) (`Reporter`, `FreezeGate`) và [`demo/check.py`](demo/check.py) (`report`).

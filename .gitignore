@@ -46,3 +46,9 @@ bytebase_demo/
 kafkaconnect_demo/
 docs/*.md
 Dockerfile
+
+# Demo: file ghi lại trade để replay (lớn, tạo lại được)
+demo/recordings/
+
+# Bí mật thật (token, mật khẩu) — KHÔNG commit. Mẫu: config/secrets.env.example
+config/secrets.env

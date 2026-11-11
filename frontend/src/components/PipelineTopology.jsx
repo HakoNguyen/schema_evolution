@@ -11,6 +11,16 @@ const STATUS_STYLE = {
   error: { color: 'var(--danger-color)', label: { en: 'Last scan failed', vi: 'Lần quét gần nhất lỗi' } },
 };
 
+// Trạng thái tổng của pipeline: lỗi kết nối > chờ duyệt > bình thường.
+function pipelineHealth(p) {
+  const tr = p.transport || p.broker || {};
+  if ([tr.status, tr.fallback?.status].some(s => s === 'disconnected' || s === 'error')) {
+    return { color: 'var(--danger-color)', key: 'degraded' };
+  }
+  if (p.gatekeeper?.status !== 'healthy') return { color: 'var(--warning-color)', key: 'pending_approval' };
+  return { color: 'var(--success-color)', key: 'healthy' };
+}
+
 // Trạng thái chạy thật lấy từ /api/topology (scheduler / Kafka consumer).
 function RuntimeStatus({ status, error, lastScanAt }) {
   const { lang } = useLanguage();
@@ -39,7 +49,7 @@ export default function PipelineTopology() {
     setFetchError(null);
     fetch('/api/topology')
       .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}: không thể lấy thông tin sơ đồ`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
       .then(data => {
@@ -51,8 +61,8 @@ export default function PipelineTopology() {
       })
       .catch(err => {
         console.error("Error fetching topology:", err);
-        setFetchError(err.message || "Lỗi kết nối tới hệ thống");
-        addToast("Không thể tải sơ đồ luồng dữ liệu. Vui lòng kiểm tra API backend.", "error");
+        setFetchError(err.message || t('toast_network_error'));
+        addToast(t('err_load_topology'), "error");
       })
       .finally(() => setLoading(false));
   };
@@ -80,7 +90,7 @@ export default function PipelineTopology() {
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--card-bg)' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Layers size={18} color="var(--primary-color)" /> {t('topology_title')}
+            <Layers size={16} color="var(--text-dim)" /> {t('topology_title')}
           </h3>
           <p style={{ margin: '2px 0 0 0', fontSize: '0.8rem', color: 'var(--text-dim)' }}>
             {t('topology_sub')}
@@ -135,11 +145,11 @@ export default function PipelineTopology() {
               fontWeight: 600,
               border: 'none',
               cursor: 'pointer',
-              background: selectedPipeline === 'all' ? 'var(--primary-color)' : 'var(--card-bg)',
-              color: selectedPipeline === 'all' ? '#0b0f17' : 'var(--text-muted)'
+              background: selectedPipeline === 'all' ? 'var(--card-hover)' : 'var(--card-bg)',
+              color: selectedPipeline === 'all' ? 'var(--text-main)' : 'var(--text-muted)'
             }}
           >
-            All
+            {t('all')}
           </button>
           {pipelines.map(p => (
             <button
@@ -152,8 +162,8 @@ export default function PipelineTopology() {
                 fontWeight: 600,
                 border: 'none',
                 cursor: 'pointer',
-                background: selectedPipeline === p.name ? 'var(--primary-color)' : 'var(--card-bg)',
-                color: selectedPipeline === p.name ? '#0b0f17' : 'var(--text-muted)',
+                background: selectedPipeline === p.name ? 'var(--card-hover)' : 'var(--card-bg)',
+                color: selectedPipeline === p.name ? 'var(--text-main)' : 'var(--text-muted)',
                 whiteSpace: 'nowrap'
               }}
             >
@@ -178,17 +188,34 @@ export default function PipelineTopology() {
             marginBottom: '16px'
           }}>
             <ShieldAlert size={18} />
-            <span><strong>Connection error:</strong> {fetchError}</span>
+            <span><strong>{t('toast_network_error')}:</strong> {fetchError}</span>
           </div>
         )}
 
         {loading && pipelines.length === 0 ? (
-          <div className="no-data">Loading topology...</div>
+          <div className="no-data">{t('loading')}</div>
         ) : filteredPipelines.length === 0 && !fetchError ? (
-          <div className="no-data">No matching pipeline found.</div>
+          <div className="no-data">{t('no_match')}</div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             {filteredPipelines.map(pipeline => {
+              if (pipeline.config_error) {
+                // File cấu hình lỗi: engine không giám sát pipeline này, các pipeline khác không bị ảnh hưởng.
+                return (
+                  <div key={pipeline.file} style={{ background: 'var(--body-bg)', border: '1px solid var(--danger-border)', borderRadius: '8px', padding: '14px 18px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{pipeline.name}</span>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                        <span className="dot" style={{ color: 'var(--danger-color)' }} />{t('config_error')}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '6px' }}>
+                      <code>config/pipelines/{pipeline.file}</code> · {t('config_error_hint')}
+                    </div>
+                    <code style={{ display: 'block', fontSize: '0.75rem', color: 'var(--danger-color)', marginTop: '6px', whiteSpace: 'pre-wrap' }}>{pipeline.config_error}</code>
+                  </div>
+                );
+              }
               const isSingleView = selectedPipeline !== 'all';
               const isExpanded = isSingleView || !!expandedPipelines[pipeline.name];
 
@@ -222,24 +249,25 @@ export default function PipelineTopology() {
                           {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                         </div>
                       )}
-                      <span style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                        Pipeline: <code style={{ color: 'var(--primary-color)' }}>{pipeline.name}</code>
-                      </span>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginLeft: '6px' }}>
-                        ({(pipeline.transport?.kind === 'broker' || pipeline.broker?.kind === 'broker')
-                          ? `${pipeline.source?.type?.toUpperCase()} ➔ ${pipeline.target?.configured ? pipeline.target.type.toUpperCase() : 'SELF-MONITOR'} [CDC]` 
-                          : `${pipeline.source?.type?.toUpperCase()} ➔ ${pipeline.target?.configured ? pipeline.target.type.toUpperCase() : 'SELF-MONITOR'} [Polling]`
-                        })
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>{pipeline.name}</span>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
+                        {pipeline.source?.type?.toUpperCase()} → {pipeline.target?.configured ? pipeline.target.type.toUpperCase() : t('source_only')}
+                        {' · '}{(pipeline.transport?.kind === 'broker' || pipeline.broker?.kind === 'broker') ? 'CDC' : 'Polling'}
                       </span>
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        {pipeline.tables?.length || 0} {t('monitored_tables_count')}
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                        {pipeline.tables?.length || 0} {t('monitored_tables_count').toLowerCase()}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: pipeline.gatekeeper?.status === 'healthy' ? 'var(--success-color)' : 'var(--danger-color)', fontWeight: 600 }}>
-                        {pipeline.gatekeeper?.status === 'healthy' ? `● ${t('healthy')}` : `● ${t('paused')}`}
-                      </div>
+                      {(() => {
+                        const h = pipelineHealth(pipeline);
+                        return (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: 'var(--text-muted)' }}>
+                            <span className="dot" style={{ color: h.color }} />{t(h.key)}
+                          </span>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -251,7 +279,7 @@ export default function PipelineTopology() {
                         
                         {/* Node 1: Source */}
                         <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
-                          <Database size={22} color="var(--primary-color)" style={{ marginBottom: '6px' }} />
+                          <Database size={18} color="var(--text-dim)" style={{ marginBottom: '6px' }} />
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_source')}</div>
                           <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', textTransform: 'uppercase', marginTop: '2px' }}>{pipeline.source?.type}</div>
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '2px' }}>{pipeline.source?.host}</div>
@@ -262,10 +290,10 @@ export default function PipelineTopology() {
                         {/* Node 2: Transport (Kafka Broker vs Polling Scheduler) */}
                         {(pipeline.transport?.kind === 'broker' || pipeline.broker?.kind === 'broker') ? (
                           <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
-                            <Cpu size={22} color="var(--success-color)" style={{ marginBottom: '6px' }} />
+                            <Cpu size={18} color="var(--text-dim)" style={{ marginBottom: '6px' }} />
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_broker')}</div>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Redpanda Kafka</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--success-color)', marginTop: '2px' }}>{pipeline.transport?.topic || pipeline.broker?.topic || pipeline.name}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--mono)', marginTop: '2px' }}>{pipeline.transport?.topic || pipeline.broker?.topic || pipeline.name}</div>
                             <RuntimeStatus status={pipeline.transport?.status} error={pipeline.transport?.error} />
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '4px' }}>
                               ({t('polling_fallback')} {pipeline.transport?.fallback?.interval}s)
@@ -278,10 +306,10 @@ export default function PipelineTopology() {
                           </div>
                         ) : (
                           <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
-                            <Clock size={22} color="var(--primary-color)" style={{ marginBottom: '6px' }} />
+                            <Clock size={18} color="var(--text-dim)" style={{ marginBottom: '6px' }} />
                             <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_scheduler')}</div>
                             <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Polling Scanner</div>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--primary-color)', marginTop: '2px' }}>Interval: {pipeline.transport?.interval}s</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>Interval: {pipeline.transport?.interval}s</div>
                             <RuntimeStatus
                               status={pipeline.transport?.status}
                               error={pipeline.transport?.last_error}
@@ -297,16 +325,16 @@ export default function PipelineTopology() {
                           flex: 1, 
                           minWidth: '140px', 
                           background: 'var(--card-bg)', 
-                          border: pipeline.gatekeeper?.status === 'healthy' ? '1px solid var(--primary-border)' : '1px solid var(--danger-border)', 
-                          borderRadius: '8px', 
-                          padding: '16px 12px', 
-                          textAlign: 'center' 
+                          border: pipeline.gatekeeper?.status === 'healthy' ? '1px solid var(--border-color)' : '1px solid var(--warning-border)',
+                          borderRadius: '8px',
+                          padding: '16px 12px',
+                          textAlign: 'center'
                         }}>
-                          <ShieldCheck size={22} color={pipeline.gatekeeper?.status === 'healthy' ? 'var(--primary-color)' : 'var(--danger-color)'} style={{ marginBottom: '6px' }} />
+                          <ShieldCheck size={18} color={pipeline.gatekeeper?.status === 'healthy' ? 'var(--text-dim)' : 'var(--warning-color)'} style={{ marginBottom: '6px' }} />
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{t('node_engine')}</div>
                           <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-main)', marginTop: '2px' }}>Gatekeeper</div>
-                          <div style={{ fontSize: '0.75rem', color: pipeline.gatekeeper?.status === 'healthy' ? 'var(--primary-color)' : 'var(--danger-color)', fontWeight: 600, marginTop: '2px' }}>
-                            {pipeline.gatekeeper?.status === 'healthy' ? t('healthy') : t('paused')}
+                          <div style={{ fontSize: '0.75rem', color: pipeline.gatekeeper?.status === 'healthy' ? 'var(--success-color)' : 'var(--warning-color)', fontWeight: 500, marginTop: '2px' }}>
+                            {pipeline.gatekeeper?.status === 'healthy' ? t('healthy') : t('pending_approval')}
                           </div>
                         </div>
 
@@ -314,7 +342,7 @@ export default function PipelineTopology() {
 
                         {/* Node 4: Target */}
                         <div style={{ flex: 1, minWidth: '140px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px 12px', textAlign: 'center' }}>
-                          <HardDrive size={22} color="var(--warning-color)" style={{ marginBottom: '6px' }} />
+                          <HardDrive size={18} color="var(--text-dim)" style={{ marginBottom: '6px' }} />
                           <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                             {pipeline.target?.configured ? t('node_target') : 'Target (Self-monitor)'}
                           </div>
@@ -346,9 +374,9 @@ export default function PipelineTopology() {
                               color: 'var(--text-main)' 
                             }}
                           >
-                            {tItem.is_frozen ? <AlertTriangle size={12} color="var(--danger-color)" /> : <CheckCircle2 size={12} color="var(--success-color)" />}
+                            {tItem.is_frozen ? <AlertTriangle size={12} color="var(--warning-color)" /> : <CheckCircle2 size={12} color="var(--success-color)" />}
                             <span>{tItem.name}</span>
-                            <span style={{ fontSize: '0.7rem', color: 'var(--primary-color)', fontWeight: 600 }}>v{tItem.version}</span>
+                            <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>v{tItem.version}</span>
                           </span>
                         ))}
                       </div>                    </div>

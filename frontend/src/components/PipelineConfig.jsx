@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Sliders, Server, Plus, Edit2, Trash2, X, Save, RefreshCw, Layers, Search } from 'lucide-react';
+import { Sliders, Server, Plus, Edit2, Trash2, X, Save, RefreshCw, Layers, Search, Zap, Clock } from 'lucide-react';
 import { useToast } from './NotificationToast';
 import { useLanguage } from '../context/LanguageContext';
+
+// Mục trong tables: "orders" | "sales.orders" | {source, target} -> chữ hiển thị/sửa trên form.
+const tableText = (t) => (typeof t === 'string' ? t : `${t.source} -> ${t.target}`);
 
 export default function PipelineConfig() {
   const { t } = useLanguage();
@@ -20,16 +23,22 @@ export default function PipelineConfig() {
     name: '',
     detectionMode: 'polling',
     kafkaTopic: '',
+    intervalSeconds: '',
     sourceType: 'postgres',
     sourceHost: 'localhost',
     sourcePort: 5432,
     sourceDb: 'sample_db',
+    sourceUser: '',
+    sourcePassword: '',
     targetType: 'clickhouse',
     targetHost: 'localhost',
     targetPort: 8123,
     targetDb: 'default',
+    targetUser: '',
+    targetPassword: '',
     tables: ''
   });
+  const [formErrors, setFormErrors] = useState([]);
 
   const { addToast } = useToast();
 
@@ -45,7 +54,7 @@ export default function PipelineConfig() {
     })
     .catch(err => {
       console.error("Lỗi khi tải cấu hình:", err);
-      addToast("Không thể tải thông tin cấu hình từ API", "error");
+      addToast(t('err_load_config'), "error");
     })
     .finally(() => setLoading(false));
   };
@@ -61,15 +70,20 @@ export default function PipelineConfig() {
         name: pipeline.name || '',
         detectionMode: pipeline.detection?.mode || 'polling',
         kafkaTopic: pipeline.detection?.kafka?.topic || pipeline.name || '',
+        intervalSeconds: pipeline.detection?.interval_seconds ?? '',
         sourceType: pipeline.source?.type || 'postgres',
         sourceHost: pipeline.source?.config?.host || 'localhost',
         sourcePort: pipeline.source?.config?.port || 5432,
-        sourceDb: pipeline.source?.config?.database || '',
-        targetType: pipeline.target?.type || 'clickhouse',
+        sourceDb: pipeline.source?.config?.dbname ?? pipeline.source?.config?.database ?? '',
+        sourceUser: pipeline.source?.config?.user || '',
+        sourcePassword: pipeline.source?.config?.password || '',
+        targetType: pipeline.target?.type || 'none',
         targetHost: pipeline.target?.config?.host || 'localhost',
         targetPort: pipeline.target?.config?.port || 8123,
-        targetDb: pipeline.target?.config?.database || '',
-        tables: (pipeline.tables || []).join(', ')
+        targetDb: pipeline.target?.config?.dbname ?? pipeline.target?.config?.database ?? '',
+        targetUser: pipeline.target?.config?.user || '',
+        targetPassword: pipeline.target?.config?.password || '',
+        tables: (pipeline.tables || []).map(tableText).join(', ')
       });
     } else {
       setEditingPipeline(null);
@@ -77,96 +91,135 @@ export default function PipelineConfig() {
         name: '',
         detectionMode: 'polling',
         kafkaTopic: '',
+        intervalSeconds: '',
         sourceType: 'postgres',
         sourceHost: 'localhost',
         sourcePort: 5432,
         sourceDb: 'sample_db',
+        sourceUser: '',
+        sourcePassword: '',
         targetType: 'clickhouse',
         targetHost: 'localhost',
         targetPort: 8123,
         targetDb: 'default',
+        targetUser: '',
+        targetPassword: '',
         tables: 'users, orders'
       });
     }
+    setFormErrors([]);
     setShowModal(true);
+  };
+
+  const credentialInputs = (role) => [['User', 'user', 'text'], ['Password', 'password', 'password']].map(([label, field, type]) => {
+    const key = `${role}${field[0].toUpperCase()}${field.slice(1)}`;
+    return (
+      <div key={key}>
+        <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{label}</label>
+        <input
+          type={type}
+          autoComplete="off"
+          value={formData[key]}
+          onChange={e => setFormData({ ...formData, [key]: e.target.value })}
+          style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+        />
+      </div>
+    );
+  });
+
+  // Thao tác Edit/Delete theo TÊN FILE của dòng đang hiển thị (name trong file có thể khác/trùng file khác).
+  const fileStem = (pipe) => (pipe._filename || `${pipe.name}.yaml`).replace(/\.yaml$/, '');
+
+  // Lỗi từ API: 422 {detail: {message, errors: [...]}} | {detail: "..."}.
+  const errorList = (data) => {
+    const d = data?.detail;
+    if (Array.isArray(d?.errors)) return d.errors;
+    return [typeof d === 'string' ? d : d?.message || t('toast_action_failed')];
+  };
+
+  // Form chỉ quản lý một số trường: ghép lên cấu hình cũ để KHÔNG làm mất các trường khác
+  // (user/password, bootstrap_servers, fallback_polling_interval_seconds, tham số kết nối khác...).
+  const withConnection = (prev, type, host, port, db, user, password) => {
+    const config = { ...(prev?.type === type ? prev.config : {}) }; // đổi engine -> bỏ tham số của engine cũ
+    delete config.dbname;
+    delete config.database;
+    Object.assign(config, { host, port: Number(port), [type === 'postgres' ? 'dbname' : 'database']: db });
+    for (const [key, value] of [['user', user], ['password', password]]) {
+      if (value) config[key] = value; else delete config[key];
+    }
+    return { ...(prev || {}), type, config };
   };
 
   const handleSavePipeline = (e) => {
     e.preventDefault();
-    const tableList = formData.tables.split(',').map(t => t.trim()).filter(Boolean);
-    
+    // "sales.orders -> orders_raw" = bảng đích đặt tên khác nguồn.
+    const tableList = formData.tables.split(',').map(t => t.trim()).filter(Boolean).map(tok => {
+      const [source, target] = tok.split('->').map(x => x.trim());
+      return target ? { source, target } : source;
+    });
+    // Bắt đầu từ cấu hình đang có (bỏ trường _ chỉ dùng cho UI) rồi ghi đè phần form quản lý.
+    const base = editingPipeline
+      ? JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(editingPipeline).filter(([k]) => !k.startsWith('_')))))
+      : {};
+
+    const detection = { ...(base.detection || {}), mode: formData.detectionMode };
+    if (formData.detectionMode === 'event_driven') {
+      detection.kafka = { ...(detection.kafka || {}), topic: formData.kafkaTopic.trim() || formData.name };
+    } else {
+      delete detection.kafka;
+    }
+    if (formData.detectionMode === 'polling' && String(formData.intervalSeconds).trim() !== '') {
+      detection.interval_seconds = Number(formData.intervalSeconds);
+    } else {
+      delete detection.interval_seconds;
+    }
+
     const payload = {
+      ...base,
       name: formData.name,
-      detection: {
-        mode: formData.detectionMode
-      },
-      source: {
-        type: formData.sourceType,
-        config: {
-          host: formData.sourceHost,
-          port: Number(formData.sourcePort),
-          database: formData.sourceDb
-        }
-      },
+      detection,
+      source: withConnection(base.source, formData.sourceType, formData.sourceHost, formData.sourcePort,
+                             formData.sourceDb, formData.sourceUser, formData.sourcePassword),
       tables: tableList
     };
-
-    if (formData.detectionMode === 'event_driven') {
-      payload.detection.kafka = {
-        topic: formData.kafkaTopic.trim() || formData.name
-      };
-    }
-
     if (formData.targetType && formData.targetType !== 'none') {
-      payload.target = {
-        type: formData.targetType,
-        config: {
-          host: formData.targetHost,
-          port: Number(formData.targetPort),
-          database: formData.targetDb
-        }
-      };
+      payload.target = withConnection(base.target, formData.targetType, formData.targetHost, formData.targetPort,
+                                      formData.targetDb, formData.targetUser, formData.targetPassword);
+    } else {
+      delete payload.target;
     }
 
-    const url = editingPipeline ? `/api/config/pipelines/${editingPipeline.name}` : '/api/config/pipelines';
-    const method = editingPipeline ? 'PUT' : 'POST';
-
+    const url = editingPipeline ? `/api/config/pipelines/${encodeURIComponent(fileStem(editingPipeline))}` : '/api/config/pipelines';
     fetch(url, {
-      method,
+      method: editingPipeline ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
-    .then(res => {
-      if (!res.ok) throw new Error("Lỗi khi lưu pipeline");
-      return res.json();
-    })
-    .then(data => {
-      addToast(data.message || "Đã lưu cấu hình pipeline thành công!", "success");
+    .then(async res => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFormErrors(errorList(data));  // giữ form mở để sửa
+        return;
+      }
+      addToast(data.message || t('toast_saved'), "success");
       setShowModal(false);
       fetchConfigs();
     })
-    .catch(err => {
-      console.error(err);
-      addToast(err.message, "error");
-    });
+    .catch(err => setFormErrors([`${t('toast_network_error')}: ${err.message}`]));
   };
 
-  const handleDeletePipeline = (name) => {
-    if (!window.confirm(`Bạn có chắc chắn muốn xóa file cấu hình config/pipelines/${name}.yaml?`)) return;
+  const handleDeletePipeline = (pipe) => {
+    const stem = fileStem(pipe);
+    if (!window.confirm(`${t('confirm_delete')} config/pipelines/${stem}.yaml?`)) return;
 
-    fetch(`/api/config/pipelines/${name}`, { method: 'DELETE' })
-      .then(res => {
-        if (!res.ok) throw new Error("Không thể xóa file pipeline");
-        return res.json();
-      })
-      .then(data => {
-        addToast(data.message || `Đã xóa pipeline ${name}`, "info");
+    fetch(`/api/config/pipelines/${encodeURIComponent(stem)}`, { method: 'DELETE' })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(errorList(data).join('; '));
+        addToast(data.message || `${t('toast_deleted')}: ${stem}`, "info");
         fetchConfigs();
       })
-      .catch(err => {
-        console.error(err);
-        addToast(err.message, "error");
-      });
+      .catch(err => addToast(err.message, "error"));
   };
 
   const handleSaveSystemConfig = () => {
@@ -175,18 +228,13 @@ export default function PipelineConfig() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(systemConfig)
     })
-    .then(res => {
-      if (!res.ok) throw new Error("Không thể cập nhật system config");
-      return res.json();
-    })
-    .then(data => {
-      addToast(data.message || "Đã lưu main.yaml!", "success");
+    .then(async res => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(errorList(data).join('; '));
+      addToast(data.message || t('toast_saved'), "success");
       fetchConfigs();
     })
-    .catch(err => {
-      console.error(err);
-      addToast(err.message, "error");
-    });
+    .catch(err => addToast(err.message, "error"));
   };
 
   const filteredPipelines = pipelines.filter(p => 
@@ -201,7 +249,7 @@ export default function PipelineConfig() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, margin: 0, color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <Sliders style={{ color: 'var(--primary-color)' }} /> {t('config_title')}
+            <Sliders size={18} style={{ color: 'var(--text-dim)' }} /> {t('config_title')}
           </h2>
           <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             {t('config_sub')}
@@ -215,8 +263,8 @@ export default function PipelineConfig() {
               padding: '6px 16px',
               borderRadius: '6px',
               border: 'none',
-              background: activeSubTab === 'pipelines' ? 'var(--primary-color)' : 'transparent',
-              color: activeSubTab === 'pipelines' ? '#0b0f17' : 'var(--text-muted)',
+              background: activeSubTab === 'pipelines' ? 'var(--card-hover)' : 'transparent',
+              color: activeSubTab === 'pipelines' ? 'var(--text-main)' : 'var(--text-muted)',
               cursor: 'pointer',
               fontWeight: 600,
               fontSize: '0.85rem'
@@ -230,8 +278,8 @@ export default function PipelineConfig() {
               padding: '6px 16px',
               borderRadius: '6px',
               border: 'none',
-              background: activeSubTab === 'system' ? 'var(--primary-color)' : 'transparent',
-              color: activeSubTab === 'system' ? '#0b0f17' : 'var(--text-muted)',
+              background: activeSubTab === 'system' ? 'var(--card-hover)' : 'transparent',
+              color: activeSubTab === 'system' ? 'var(--text-main)' : 'var(--text-muted)',
               cursor: 'pointer',
               fontWeight: 600,
               fontSize: '0.85rem'
@@ -248,7 +296,7 @@ export default function PipelineConfig() {
         /* TAB 1: SYSTEM CONFIG (main.yaml) */
         <div style={{ background: 'var(--card-bg)', padding: '24px', borderRadius: '10px', border: '1px solid var(--border-color)' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 600, marginTop: 0, marginBottom: '20px', color: 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Server size={18} style={{ color: 'var(--primary-color)' }} /> {t('system_config_title')}
+            <Server size={16} style={{ color: 'var(--text-dim)' }} /> {t('system_config_title')}
           </h3>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
@@ -375,7 +423,7 @@ export default function PipelineConfig() {
             <button
               onClick={() => openModal(null)}
               className="btn-primary"
-              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success-color)', color: '#fff' }}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--primary-color)', color: 'var(--primary-fg)' }}
             >
               <Plus size={16} /> {t('add_new_pipeline')}
             </button>
@@ -397,57 +445,50 @@ export default function PipelineConfig() {
 
               <tbody>
                 {filteredPipelines.map((pipe) => (
-                  <tr key={pipe.name}>
+                  <tr key={pipe._filename || pipe.name}>
                     <td>
                       <div>
-                        <strong style={{ color: 'var(--primary-color)', fontSize: '0.9rem' }}>{pipe.name}</strong>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                          <code>{pipe._filename || `${pipe.name}.yaml`}</code>
-                        </div>
+                        <div style={{ fontWeight: 500 }}>{pipe.name}</div>
+                        <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{pipe._filename || `${pipe.name}.yaml`}</code>
+                        {pipe._error && (
+                          <div style={{ fontSize: '0.72rem', color: 'var(--danger-color)', marginTop: '4px', maxWidth: '260px' }}>
+                            {t('config_error')}: {pipe._error}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td>
-                      {pipe.detection?.mode === 'event_driven' ? (
-                        <div>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#f59e0b', background: '#f59e0b1f', padding: '3px 8px', borderRadius: '4px', border: '1px solid #f59e0b40', textTransform: 'uppercase' }}>
-                            {t('event_driven_kafka')}
-                          </span>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            Topic: <code>{pipe.detection?.kafka?.topic || pipe.name}</code>
-                          </div>
-                        </div>
+                      <span className="pill">
+                        {pipe.detection?.mode === 'event_driven' ? <Zap size={11} /> : <Clock size={11} />}
+                        {pipe.detection?.mode === 'event_driven' ? 'Kafka CDC' : 'Polling'}
+                      </span>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '4px' }}>
+                        {pipe.detection?.mode === 'event_driven'
+                          ? <>topic <code>{pipe.detection?.kafka?.topic || pipe.name}</code></>
+                          : t('periodic_scan')}
+                      </div>
+                    </td>
+                    <td>
+                      <div style={{ fontWeight: 500, fontSize: '0.8rem', textTransform: 'uppercase' }}>{pipe.source?.type}</div>
+                      <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                        {pipe.source?.config?.host}:{pipe.source?.config?.port}/{pipe.source?.config?.database || pipe.source?.config?.dbname}
+                      </code>
+                    </td>
+                    <td>
+                      {pipe.target?.type && pipe.target?.type !== 'none' ? (
+                        <>
+                          <div style={{ fontWeight: 500, fontSize: '0.8rem', textTransform: 'uppercase' }}>{pipe.target.type}</div>
+                          <code style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{pipe.target?.config?.host || 'localhost'}:{pipe.target?.config?.port}</code>
+                        </>
                       ) : (
-                        <div>
-                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#3b82f6', background: '#3b82f61f', padding: '3px 8px', borderRadius: '4px', border: '1px solid #3b82f640', textTransform: 'uppercase' }}>
-                            {t('polling_scanner')}
-                          </span>
-                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                            {t('periodic_scan')}
-                          </div>
-                        </div>
+                        <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>{t('source_only')}</span>
                       )}
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--success-color)', background: 'var(--success-bg)', padding: '3px 8px', borderRadius: '4px', border: '1px solid var(--success-border)', textTransform: 'uppercase' }}>
-                        {pipe.source?.type}
-                      </span>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {pipe.source?.config?.host}:{pipe.source?.config?.port} ({pipe.source?.config?.database})
-                      </div>
-                    </td>
-                    <td>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: pipe.target?.type && pipe.target?.type !== 'none' ? 'var(--warning-color)' : 'var(--primary-color)', background: pipe.target?.type && pipe.target?.type !== 'none' ? 'var(--warning-bg)' : 'var(--primary-bg)', padding: '3px 8px', borderRadius: '4px', border: pipe.target?.type && pipe.target?.type !== 'none' ? '1px solid var(--warning-border)' : '1px solid var(--primary-border)', textTransform: 'uppercase' }}>
-                        {pipe.target?.type && pipe.target?.type !== 'none' ? pipe.target.type : `SELF-MONITOR (${pipe.source?.type?.toUpperCase()})`}
-                      </span>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {pipe.target?.type && pipe.target?.type !== 'none' ? `${pipe.target?.config?.host || 'localhost'}` : t('source_only')}
-                      </div>
                     </td>
                     <td>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {pipe.tables?.map(tItem => (
-                          <span key={tItem} style={{ background: 'var(--body-bg)', color: 'var(--primary-color)', padding: '2px 6px', borderRadius: '4px', border: '1px solid var(--border-color)', fontSize: '0.75rem' }}>
-                            {tItem}
+                          <span key={tableText(tItem)} className="pill" style={{ fontFamily: 'var(--mono)', borderRadius: '4px' }}>
+                            {tableText(tItem)}
                           </span>
                         ))}
                       </div>
@@ -462,8 +503,8 @@ export default function PipelineConfig() {
                           <Edit2 size={12} /> {t('edit_btn')}
                         </button>
                         <button
-                          onClick={() => handleDeletePipeline(pipe.name)}
-                          style={{ padding: '4px 10px', fontSize: '0.8rem', background: 'var(--danger-bg)', color: 'var(--danger-color)', border: '1px solid var(--danger-border)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                          onClick={() => handleDeletePipeline(pipe)}
+                          className="btn-outline" style={{ padding: '4px 10px', fontSize: '0.8rem', color: 'var(--danger-color)', display: 'flex', alignItems: 'center', gap: '4px' }}
                         >
                           <Trash2 size={12} /> {t('delete_btn')}
                         </button>
@@ -528,7 +569,7 @@ export default function PipelineConfig() {
               {/* Detection Section */}
               <div style={{ background: 'var(--body-bg)', padding: '14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
                 <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#f59e0b', fontWeight: 700, textTransform: 'uppercase' }}>{t('detection_section_title')}</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: formData.detectionMode === 'event_driven' ? '1fr 1fr' : '1fr', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
                     <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('detection_mode_label')}</label>
                     <select
@@ -540,6 +581,19 @@ export default function PipelineConfig() {
                       <option value="event_driven">{t('event_driven_kafka')}</option>
                     </select>
                   </div>
+                  {formData.detectionMode === 'polling' && (
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('polling_interval_label')}</label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder={String(systemConfig?.scheduler?.interval_seconds || 60)}
+                        value={formData.intervalSeconds}
+                        onChange={e => setFormData({ ...formData, intervalSeconds: e.target.value })}
+                        style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+                      />
+                    </div>
+                  )}
                   {formData.detectionMode === 'event_driven' && (
                     <div>
                       <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('kafka_cdc_topic_label')}</label>
@@ -599,6 +653,7 @@ export default function PipelineConfig() {
                       style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
                     />
                   </div>
+                  {credentialInputs('source')}
                 </div>
               </div>
 
@@ -646,6 +701,7 @@ export default function PipelineConfig() {
                       style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
                     />
                   </div>
+                  {credentialInputs('target')}
                 </div>
               </div>
 
@@ -661,6 +717,15 @@ export default function PipelineConfig() {
                 />
               </div>
 
+              {formErrors.length > 0 && (
+                <div role="alert" ref={el => el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })} style={{ marginBottom: '16px', padding: '10px 12px', border: '1px solid var(--danger-border)', background: 'var(--danger-bg)', borderRadius: '6px', fontSize: '0.8rem', color: 'var(--danger-color)' }}>
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>{t('config_not_saved')}</div>
+                  <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                    {formErrors.map(err => <li key={err}><code>{err}</code></li>)}
+                  </ul>
+                </div>
+              )}
+
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                 <button
                   type="button"
@@ -672,7 +737,7 @@ export default function PipelineConfig() {
                 <button
                   type="submit"
                   className="btn-primary"
-                  style={{ background: 'var(--success-color)', color: '#fff' }}
+                  style={{ background: 'var(--primary-color)', color: 'var(--primary-fg)' }}
                 >
                   {editingPipeline ? t('save_changes_btn') : t('create_file_btn')}
                 </button>

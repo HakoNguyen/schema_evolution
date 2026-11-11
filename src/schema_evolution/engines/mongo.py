@@ -15,7 +15,21 @@ from bson.int64 import Int64
 
 SAMPLE_SIZE = 10000
 
+
+def _merge_types(types_seen: set[str]) -> str:
+    """Một field mang nhiều kiểu số trong các document: chọn kiểu chứa được tất cả, còn lại -> json."""
+    if len(types_seen) == 1:
+        return next(iter(types_seen))
+    if types_seen <= {"int", "bigint"}:
+        return "bigint"   # int32 lớn dần thành int64: nới rộng, không phải đổi kiểu
+    if types_seen <= {"int", "double"}:
+        return "double"   # 10 lẫn 10.5 (số JS): int32 nằm trọn trong double
+    return "json"
+
+
 class MongoEngine(BaseEngine):
+    schemaless = True  # field vắng trong mẫu document không có nghĩa là đã bị xoá (core giữ cột cũ)
+
     @property
     def engine_type(self) -> str:
         return "mongodb"
@@ -77,7 +91,7 @@ class MongoEngine(BaseEngine):
 
         columns = [ColumnSchema(name="_id", data_type="text", nullable=False)]
         for field_name, types_seen in field_types.items():
-            data_type = types_seen.pop() if len(types_seen) == 1 else "json"
+            data_type = _merge_types(types_seen)
 
             # Mongo schemaless: document cũ ngoài phạm vi quét có thể thiếu
             # field, nên mọi field (trừ _id) luôn coi là nullable — tránh
