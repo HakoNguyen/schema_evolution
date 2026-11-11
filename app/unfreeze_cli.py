@@ -116,6 +116,7 @@ def main():
         pairs = build_pairs(config["pairs"])
         matching_pair = _find_pair_by_name(pairs, pair_name) if pair_name else None
         target_engine = matching_pair["target_engine"] if matching_pair else None
+        target_table = matching_pair["table_targets"].get(table_name) if matching_pair else None
 
         if target_engine is not None:
             # build_pairs() chỉ khởi tạo engine, chưa connect.
@@ -128,14 +129,15 @@ def main():
         try:
             if target_engine is not None:
                 from api.sandbox import run_sandbox_test
-                sandbox = run_sandbox_test(target_engine, registry_key, registry)
+                sandbox = run_sandbox_test(target_engine, registry_key, registry, target_table=target_table)
                 registry.mark_sandbox_result(registry_key, sandbox["status"] == "success", sandbox.get("message", ""))
                 print(f"[CLI] Sandbox: {sandbox['status']} - {sandbox.get('message')}")
                 if sandbox["status"] != "success":
                     print("[X] Sandbox that bai. Huy approve, bang van frozen.")
                     sys.exit(1)
 
-            result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key)
+            result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key,
+                                             target_table=target_table)
         finally:
             if target_engine is not None:
                 target_engine.disconnect()

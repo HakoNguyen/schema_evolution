@@ -77,7 +77,14 @@ def test_api_never_exposes_or_overwrites_secret():
             sys_cfg = api.get_system_config()
             assert sys_cfg["telegram"]["bot_token"] == MASK
             api.update_system_config(sys_cfg)                                       # lưu lại y nguyên
-            assert yaml.safe_load(Path("config/main.yaml").read_text())["telegram"]["bot_token"] == "123:ABC"
+            # Token viết thẳng (kiểu cũ) được giữ giá trị, nhưng chuyển sang secrets.env khi lưu.
+            assert yaml.safe_load(Path("config/main.yaml").read_text())["telegram"]["bot_token"] == "${TELEGRAM_BOT_TOKEN}"
+            env = Path("config/secrets.env").read_text(encoding="utf-8")
+            assert 'TELEGRAM_BOT_TOKEN="123:ABC"' in env and "SHOP_PG_PASSWORD=s3cret" in env  # dòng cũ giữ nguyên
+            from app.secret_store import load_env
+            assert load_env(Path("config"))["TELEGRAM_BOT_TOKEN"] == "123:ABC"
+            api.update_system_config({**sys_cfg, "telegram": {"bot_token": 'new"tok', "chat_id": "9"}})
+            assert load_env(Path("config"))["TELEGRAM_BOT_TOKEN"] == 'new"tok'          # cập nhật đúng biến cũ
 
             api.create_pipeline_config(yaml.safe_load(PIPE))
             listed = api.get_pipelines_config()[0]

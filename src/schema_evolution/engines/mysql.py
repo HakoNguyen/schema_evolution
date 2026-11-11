@@ -38,8 +38,8 @@ NORMALIZED_TO_MYSQL = {
     "numeric": "DECIMAL",
     "float": "FLOAT",
     "double": "DOUBLE",
-    "timestamp": "DATETIME",
-    "timestamptz": "DATETIME",
+    "timestamp": "DATETIME(6)",   # DATETIME trơn của MySQL bỏ phần dưới giây
+    "timestamptz": "DATETIME(6)",
     "date": "DATE",
     "time": "TIME",
     "text": "TEXT",
@@ -117,10 +117,13 @@ class MySQLEngine(BaseEngine):
         columns = []
         for name, data_type, column_type, is_nullable, default, max_length, precision, scale in rows:
             is_decimal = data_type == "decimal"
+            normalized = self._normalize_type(data_type, column_type)
+            if normalized == "numeric" and not is_decimal:  # BIGINT UNSIGNED: tối đa 20 chữ số
+                is_decimal, precision, scale = True, 20, 0
             columns.append(
                 ColumnSchema(
                     name=name,
-                    data_type=self._normalize_type(data_type, column_type),
+                    data_type=normalized,
                     nullable=(is_nullable == "YES"),
                     default=default,
                     max_length=max_length,
@@ -183,6 +186,12 @@ class MySQLEngine(BaseEngine):
     def _normalize_type(self, data_type: str, column_type: str) -> str:
         if data_type == "tinyint" and column_type == "tinyint(1)":
             return "boolean"
+        if "unsigned" in (column_type or "").lower():
+            # Đích không có kiểu không dấu chung -> lên kiểu có dấu rộng hơn 1 bậc, nếu không
+            # INT UNSIGNED 4294967295 thành -1 ở đích. BIGINT UNSIGNED -> numeric(20,0).
+            return {"tinyint": "smallint", "smallint": "int", "mediumint": "int", "int": "bigint"}.get(data_type, "numeric")
+        if data_type == "mediumint":
+            return "int"
         return TYPE_MAP.get(data_type, data_type)
 
     def _render_type(self, column: ColumnSchema) -> str:
@@ -194,6 +203,9 @@ class MySQLEngine(BaseEngine):
         if mysql_type == "DECIMAL" and column.precision:
             # MySQL giới hạn DECIMAL(65,30); Postgres numeric có thể lớn hơn.
             return f"DECIMAL({min(column.precision, 65)},{min(column.scale or 0, 30)})"
+        if mysql_type == "DECIMAL":
+            # DECIMAL trơn của MySQL = DECIMAL(10,0): cắt mất phần thập phân -> dùng mức rộng nhất.
+            return "DECIMAL(65,30)"
         if mysql_type == "VARCHAR":
             # Postgres cho phép varchar không độ dài, MySQL thì không.
             return "VARCHAR(255)"

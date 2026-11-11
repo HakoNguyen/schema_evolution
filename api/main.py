@@ -18,7 +18,7 @@ from app.scheduler import (
     DEFAULT_FALLBACK_INTERVAL, ENGINE_REGISTRY, PIPELINE_NAME_RE, check_with_secrets,
     load_config as _load_config_files, load_pipeline_specs, validate_main_config, validate_pipeline_spec,
 )
-from app.secret_store import load_env, mask, unmask
+from app.secret_store import externalize, load_env, mask, unmask
 from app import runtime_status
 
 app = FastAPI(title="Schema Evolution API")
@@ -380,7 +380,8 @@ def approve_changes(registry_key: str):
         return {"status": "error", "message": f"Cannot connect to target database: {e}"}
 
     try:
-        result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key)
+        result = approve_change_and_sync(target_engine, table_name, registry, registry_key=registry_key,
+                                         target_table=(pair_config.get("table_targets") or {}).get(table_name))
     finally:
         if target_engine is not None:
             target_engine.disconnect()
@@ -464,7 +465,8 @@ def test_sandbox(registry_key: str):
         
     from api.sandbox import run_sandbox_test
     try:
-        result = run_sandbox_test(target_engine, registry_key, registry)
+        result = run_sandbox_test(target_engine, registry_key, registry,
+                                  target_table=(pair_config.get("table_targets") or {}).get(table_name))
     finally:
         if target_engine is not None:
             target_engine.disconnect()
@@ -537,13 +539,21 @@ def _pipeline_file(name: str) -> Path:
     return PIPELINES_DIR / f"{name}.yaml"
 
 
+def _externalize(spec: dict, config_dir: Path, prefix: str) -> dict:
+    """Mật khẩu thật gửi từ UI -> config/secrets.env (gitignored); file YAML chỉ nhận ${VAR}."""
+    try:
+        return externalize(spec, config_dir, prefix)
+    except ValueError as e:
+        _reject([str(e)])
+
+
 @app.put("/api/config/system")
 def update_system_config(payload: dict):
     cfg = unmask(_clean(payload), _read_yaml(MAIN_CONFIG))
     resolved, errors = check_with_secrets(cfg, load_env(MAIN_CONFIG.parent), validate_main_config)
     if errors:
         _reject(errors)
-    _write_yaml(MAIN_CONFIG, cfg)  # ghi bản có ${VAR}, không bao giờ ghi giá trị bí mật đã thay
+    _write_yaml(MAIN_CONFIG, _externalize(cfg, MAIN_CONFIG.parent, ""))  # YAML chỉ giữ ${VAR}
     message = "Saved config/main.yaml — applied by the engine within ~3s"
     if _manager is not None and resolved["registry"]["dir"] != _manager.global_cfg["registry"]["dir"]:
         message += ". registry.dir change takes effect only after restarting the backend"
@@ -581,7 +591,7 @@ def create_pipeline_config(payload: dict):
     if target_file.exists() or any(s["name"] == spec["name"] for s in specs):
         raise HTTPException(status_code=409, detail=f"Pipeline '{spec['name']}' already exists")
     PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
-    _write_yaml(target_file, spec)
+    _write_yaml(target_file, _externalize(spec, PIPELINES_DIR.parent, spec["name"]))
     return {"status": "success", "filename": target_file.name,
             "message": f"Saved {target_file.name} — the engine starts monitoring within ~3s"}
 
@@ -597,7 +607,7 @@ def update_pipeline_config(name: str, payload: dict):
     _, errors = check_with_secrets(spec, load_env(PIPELINES_DIR.parent), validate_pipeline_spec)
     if errors:
         _reject(errors)
-    _write_yaml(target_file, spec)
+    _write_yaml(target_file, _externalize(spec, PIPELINES_DIR.parent, name))
     return {"status": "success", "filename": target_file.name,
             "message": f"Updated {target_file.name} — the engine reloads it within ~3s"}
 

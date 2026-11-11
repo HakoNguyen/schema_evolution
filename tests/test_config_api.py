@@ -41,7 +41,11 @@ def test_pipeline_config_api():
             # Hợp lệ -> ghi file, đọc lại đúng nội dung, giữ thứ tự khoá.
             api.create_pipeline_config(dict(SPEC))
             saved = yaml.safe_load(Path("config/pipelines/orders_sync.yaml").read_text(encoding="utf-8"))
-            assert saved == SPEC and list(saved) == list(SPEC)
+            assert list(saved) == list(SPEC)
+            # Mật khẩu gõ thẳng -> secrets.env, YAML chỉ giữ tham chiếu.
+            assert saved["source"]["config"]["password"] == "${ORDERS_SYNC_SOURCE_PASSWORD}"
+            assert 'ORDERS_SYNC_SOURCE_PASSWORD="p"' in Path("config/secrets.env").read_text(encoding="utf-8")
+            assert {**saved, "source": SPEC["source"]} == SPEC
             assert not list(Path("config/pipelines").glob("*.tmp")), "không để lại file tạm"
 
             _expect(409, api.create_pipeline_config, dict(SPEC))                          # trùng tên

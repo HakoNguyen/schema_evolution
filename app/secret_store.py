@@ -7,9 +7,11 @@ Giá trị thật lấy từ (ưu tiên giảm dần): biến môi trường th�
 - Engine thay giá trị thật vào lúc tạo kết nối (resolve), không bao giờ ghi ngược ra file.
 - API/UI chỉ thấy tham chiếu; giá trị viết thẳng trong YAML (kiểu cũ) bị che thành MASK
   và được giữ nguyên khi lưu lại (unmask).
+- Mật khẩu thật gõ trên UI/API được chuyển vào secrets.env, YAML chỉ nhận ${VAR} (externalize).
 """
 import os
 import re
+import threading
 from pathlib import Path
 
 SECRETS_FILE = "secrets.env"
@@ -71,6 +73,58 @@ def mask(value):
     if isinstance(value, list):
         return [mask(v) for v in value]
     return value
+
+
+_write_lock = threading.Lock()
+
+
+def externalize(value, config_dir: Path, prefix: str = ""):
+    """
+    Thay mọi bí mật viết thẳng bằng ${VAR} và ghi giá trị thật vào config/secrets.env.
+    Tên biến theo vị trí: pipeline "shop" + source.config.password -> SHOP_SOURCE_PASSWORD;
+    main.yaml telegram.bot_token -> TELEGRAM_BOT_TOKEN. Lưu lại cùng chỗ = cập nhật cùng biến.
+    shortcut: biến của pipeline đã xoá vẫn nằm lại trong secrets.env; dọn tay nếu cần.
+    """
+    found: dict[str, str] = {}
+
+    def walk(v, path):
+        if isinstance(v, dict):
+            out = {}
+            for k, x in v.items():
+                if _is_literal_secret(k, x):
+                    if "\n" in x or "\r" in x:
+                        raise ValueError(f"{'.'.join(path + [k])}: secret cannot contain line breaks")
+                    name = re.sub(r"[^A-Z0-9_]", "_", "_".join([prefix, *path, k]).upper()).strip("_")
+                    name = name if not name[0].isdigit() else f"P_{name}"
+                    found[name] = x
+                    out[k] = "${" + name + "}"
+                else:
+                    out[k] = walk(x, path if k == "config" else path + [k])
+            return out
+        if isinstance(v, list):
+            return [walk(x, path) for x in v]
+        return v
+
+    result = walk(value, [])
+    if found:
+        _save(config_dir, found)
+    return result
+
+
+def _save(config_dir: Path, values: dict[str, str]) -> None:
+    """Cập nhật/thêm KEY="value" trong secrets.env, giữ nguyên các dòng khác; ghi atomic."""
+    path = secrets_path(config_dir)
+    with _write_lock:
+        lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+        pending = dict(values)
+        for i, line in enumerate(lines):
+            key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+            if key in pending:
+                lines[i] = f'{key}="{pending.pop(key)}"'
+        lines += [f'{k}="{v}"' for k, v in pending.items()]
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
 
 
 def unmask(new, old):

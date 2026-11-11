@@ -71,7 +71,41 @@ def test_shared_topic_prefix_routes_to_owning_pipeline():
     print("[PASS] test_shared_topic_prefix_routes_to_owning_pipeline")
 
 
+def test_schema_qualified_tables():
+    from app.kafka_consumer import _resolve_tables, _extract_raw_table
+    spec = {"tables": ["trades", "sales.orders"]}
+    raw = _extract_raw_table({"after": {}, "source": {"schema": "sales", "table": "orders"}}, None)
+    assert raw == "sales.orders" and _resolve_tables(raw, spec) == ["sales.orders"]
+    assert _resolve_tables("public.orders", spec) == []            # cùng tên, khác schema -> không phải bảng này
+    assert _resolve_tables("public.trades", spec) == ["trades"]     # tên trơn = mọi schema (mặc định public)
+    assert _resolve_tables('"sales"."orders"', spec) == ["sales.orders"]  # id trong DDL event
+    print("[PASS] test_schema_qualified_tables")
+
+
+def test_non_json_message_warns_once():
+    import io
+    from contextlib import redirect_stdout
+    from types import SimpleNamespace
+    from app.kafka_consumer import route_message
+
+    class Worker:
+        spec = {"tables": ["orders"]}
+        def matches(self, topic): return True
+        def notify(self, table, fp): raise AssertionError("must not notify on unreadable message")
+
+    avro = SimpleNamespace(topic="shop.public.orders", value=bytes([0, 0, 0, 0, 7, 2, 4]))
+    out = io.StringIO()
+    with redirect_stdout(out):
+        for _ in range(100):
+            route_message(avro, [Worker()])  # không ném lỗi, không spam
+        route_message(SimpleNamespace(topic="shop.public.orders", value=b'"just a string"'), [Worker()])
+    assert out.getvalue().count("not supported") == 1 and "Schema Registry" in out.getvalue()
+    print("[PASS] test_non_json_message_warns_once")
+
+
 if __name__ == "__main__":
+    test_non_json_message_warns_once()
+    test_schema_qualified_tables()
     test_shared_topic_prefix_routes_to_owning_pipeline()
     test_same_structure_same_fingerprint()
     test_ddl_changes_fingerprint()

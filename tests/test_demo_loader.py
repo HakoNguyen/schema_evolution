@@ -58,7 +58,7 @@ def test_clickhouse_varchar_is_string():
     render = ClickHouseEngine({})._render_type
     assert render(ColumnSchema("s", "varchar", False, max_length=20)) == "String"
     assert render(ColumnSchema("s", "varchar", True, max_length=20)) == "Nullable(String)"
-    assert render(ColumnSchema("c", "char", False, max_length=3)) == "FixedString(3)"
+    assert render(ColumnSchema("c", "char", False, max_length=3)) == "String"  # FixedString đếm byte, không đếm ký tự
     print("[PASS] test_clickhouse_varchar_is_string")
 
 

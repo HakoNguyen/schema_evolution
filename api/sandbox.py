@@ -1,8 +1,9 @@
 from typing import Dict, Any
-from src.schema_evolution.core import SchemaRegistry, compare_schemas, TableSchema, ColumnSchema, ForeignKeySchema
+from src.schema_evolution.core import SchemaRegistry, compare_schemas, for_target, TableSchema, ColumnSchema, ForeignKeySchema
 from src.schema_evolution.engines.base import BaseEngine
 
-def run_sandbox_test(target_engine: BaseEngine | None, registry_key: str, registry: SchemaRegistry) -> Dict[str, Any]:
+def run_sandbox_test(target_engine: BaseEngine | None, registry_key: str, registry: SchemaRegistry,
+                     target_table: str | None = None) -> Dict[str, Any]:
     if target_engine is None:
         return {"status": "success", "message": "Sandbox test passed (No target engine configured, pure detection mode)."}
         
@@ -32,7 +33,7 @@ def run_sandbox_test(target_engine: BaseEngine | None, registry_key: str, regist
         
     # target_engine đã được caller connect sẵn (build_target_engine).
     try:
-        success, message = target_engine.test_ddl(all_changes)
+        success, message = target_engine.test_ddl(for_target(all_changes, target_table))
     except Exception as e:
         success, message = False, f"Sandbox test failed: {str(e)}"
     return {"status": "success" if success else "error", "message": message}

@@ -7,6 +7,7 @@ from pathlib import Path
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 import copy
+import dataclasses
 
 from src.schema_evolution.engines.base import (
     BaseEngine,
@@ -598,6 +599,13 @@ def compare_schemas(old: TableSchema, new: TableSchema) -> list[SchemaChange]:
     return changes
 
 
+def for_target(changes: list[SchemaChange], target_table: str | None) -> list[SchemaChange]:
+    """Đổi tên bảng trong change sang tên bảng đích (khi đích đặt tên khác nguồn) trước khi sinh DDL."""
+    if not target_table:
+        return changes
+    return [dataclasses.replace(c, table_name=target_table) for c in changes]
+
+
 def apply_non_breaking_changes(engine: BaseEngine, changes: list[SchemaChange]) -> list[SchemaChange]:
     if not changes:
         return []
@@ -670,6 +678,7 @@ def run_evolution_check(
     registry: SchemaRegistry,
     notifier=None,
     registry_key: str | None = None,
+    target_table: str | None = None,
 ) -> dict:
     # Kafka và polling có thể cùng xử lý 1 thay đổi: khoá theo bảng, người
     # vào sau đọc lại registry đã cập nhật -> "no_change", không trùng DDL
@@ -677,7 +686,7 @@ def run_evolution_check(
     key = registry_key if registry_key is not None else table_name
     with registry.lock(key):
         return _run_evolution_check_unlocked(
-            source_engine, target_engine, table_name, registry, notifier, key
+            source_engine, target_engine, table_name, registry, notifier, key, target_table
         )
 
 
@@ -688,6 +697,7 @@ def _run_evolution_check_unlocked(
     registry: SchemaRegistry,
     notifier,
     registry_key: str,
+    target_table: str | None = None,
 ) -> dict:
     """
     source_engine: DB bị theo dõi thay đổi — chỉ dùng để crawl_metadata,
@@ -724,6 +734,18 @@ def _run_evolution_check_unlocked(
 
     current_schema = source_engine.crawl_metadata(table_name)
     old_schema = registry.load(key)
+    if old_schema is not None and getattr(source_engine, "schemaless", False):
+        # Nguồn không có schema (Mongo): field vắng trong mẫu document != bị xoá. Giữ cột cũ,
+        # nếu không sẽ sinh DROP_COLUMN giả (breaking) và approve sẽ xoá cột thật ở đích.
+        seen = {c.name for c in current_schema.columns}
+        current_schema.columns += [copy.deepcopy(c) for c in old_schema.columns if c.name not in seen]
+        # Tương tự: mẫu chỉ toàn số nhỏ không có nghĩa field "hẹp lại" (document cũ vẫn có số lớn) -> giữ kiểu cũ.
+        old_cols = {c.name: c for c in old_schema.columns}
+        current_schema.columns = [
+            copy.deepcopy(old_cols[c.name])
+            if c.name in old_cols and _classify_type_change(old_cols[c.name], c) == ChangeType.NARROW_TYPE else c
+            for c in current_schema.columns
+        ]
 
     if registry.is_frozen(key):
         # Nguồn đã quay về đúng baseline (dev rollback sau Reject, hoặc tự hoàn tác) -> không
@@ -750,12 +772,17 @@ def _run_evolution_check_unlocked(
     if not non_breaking:
         applied = []
     elif target_engine is not None:
-        applied = apply_non_breaking_changes(target_engine, non_breaking)
+        applied = apply_non_breaking_changes(target_engine, for_target(non_breaking, target_table))
     else:
         # Detection-only: không có đích để chạy DDL, ghi nhận thẳng.
         applied = non_breaking
 
     merged_schema = _merge_schema(old_schema, applied) if applied else old_schema
+
+    # DDL tự động chạy lỗi trên đích (cú pháp, quyền, kiểu không chuyển được) -> KHÔNG được
+    # coi là đã đồng bộ: freeze + cảnh báo để người xử lý, thay vì báo changes_applied mỗi chu kỳ.
+    done = {(c.change_type, c.column_name, c.constraint_name) for c in applied}
+    breaking = breaking + [c for c in non_breaking if (c.change_type, c.column_name, c.constraint_name) not in done]
 
     if breaking:
         registry.set_frozen(key, True)
@@ -784,10 +811,11 @@ def approve_change_and_sync(
     table_name: str,
     registry: SchemaRegistry,
     registry_key: str | None = None,
+    target_table: str | None = None,
 ) -> dict:
     key = registry_key if registry_key is not None else table_name
     with registry.lock(key):
-        return _approve_change_and_sync_unlocked(target_engine, table_name, registry, key)
+        return _approve_change_and_sync_unlocked(target_engine, table_name, registry, key, target_table)
 
 
 def _approve_change_and_sync_unlocked(
@@ -795,6 +823,7 @@ def _approve_change_and_sync_unlocked(
     table_name: str,
     registry: SchemaRegistry,
     registry_key: str,
+    target_table: str | None = None,
 ) -> dict:
     """
     Approve 1 bảng đang bị frozen, ĐỒNG THỜI tự động chạy DDL tương ứng
@@ -836,7 +865,7 @@ def _approve_change_and_sync_unlocked(
     failed = []
     errors = []
     if target_engine is not None and all_changes:
-        for change in all_changes:
+        for change in for_target(all_changes, target_table):
             # Sinh DDL từng change một: 1 change không hỗ trợ (ValueError)
             # không được làm hỏng cả lượt approve.
             try:

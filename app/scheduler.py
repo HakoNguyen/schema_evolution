@@ -29,6 +29,40 @@ DEFAULT_FALLBACK_INTERVAL = 600
 PIPELINE_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")  # dùng trong registry key "pipeline/table" và tên file
 
 
+# Tên bảng đi thẳng vào câu DDL -> chỉ cho ký tự an toàn (chặn khoảng trắng, ;, dấu nháy). Tối đa 1 dấu chấm: schema.table.
+TABLE_NAME_RE = re.compile(r"^[A-Za-z0-9_$-]+(\.[A-Za-z0-9_$-]+)?$")
+
+
+def table_entries(tables: list) -> list[tuple]:
+    """
+    tables -> [(bảng nguồn, bảng đích)]. Ba dạng:
+      "orders"                                  -> ("orders", "orders")
+      "sales.orders"                            -> ("sales.orders", "orders")   schema khác public
+      {source: sales.orders, target: orders_raw} -> ánh xạ tường minh
+    """
+    out = []
+    for t in tables:
+        src, dst = (t.get("source"), t.get("target")) if isinstance(t, dict) else (t, None)
+        out.append((src, dst or (src.rsplit(".", 1)[-1] if isinstance(src, str) else None)))
+    return out
+
+
+def _table_errors(tables) -> list[str]:
+    if not isinstance(tables, list) or not tables:
+        return ['tables: non-empty list ("orders", "schema.orders" or {source: ..., target: ...})']
+    errors = []
+    entries = table_entries(tables)
+    for raw, (src, dst) in zip(tables, entries):
+        extra = set(raw) - {"source", "target"} if isinstance(raw, dict) else set()
+        if extra or not all(isinstance(n, str) and TABLE_NAME_RE.match(n) for n in (src, dst)):
+            errors.append(f"tables: invalid entry {raw!r} (letters, digits, _ $ - and one optional schema dot)")
+    for label, names in (("source", [s for s, _ in entries]), ("target", [d for _, d in entries])):
+        dupes = sorted({n for n in names if isinstance(n, str) and names.count(n) > 1})
+        if dupes:
+            errors.append(f"tables: {label} table listed twice: {', '.join(dupes)}")
+    return errors
+
+
 DB_NAME_KEY = {"postgres": "dbname", "mysql": "database", "mongodb": "database", "clickhouse": "database"}
 
 
@@ -67,12 +101,15 @@ def validate_pipeline_spec(spec) -> list[str]:
             errors.append(f"{role}.config: required mapping")
         else:
             errors += _connection_errors(role, part["type"], part["config"])
-    tables = spec.get("tables")
-    if not isinstance(tables, list) or not tables or not all(isinstance(t, str) and t for t in tables):
-        errors.append("tables: non-empty list of table names")
+    errors += _table_errors(spec.get("tables"))
     detection = spec.get("detection") or {}
     if not isinstance(detection, dict) or detection.get("mode", "polling") not in ("polling", "event_driven"):
         errors.append("detection.mode: polling or event_driven")
+    else:
+        for key in ("interval_seconds", "fallback_polling_interval_seconds"):
+            value = detection.get(key)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+                errors.append(f"detection.{key}: positive integer (seconds)")
     return errors
 
 
@@ -125,7 +162,9 @@ def load_pipeline_specs(pipelines_dir: Path, env: dict | None = None) -> tuple[l
             errors[f.name] = "; ".join(problems)
             continue
         owner[spec["name"]] = f.name
-        specs.append(spec)
+        entries = table_entries(spec["tables"])
+        # Phía sau chỉ dùng tên bảng nguồn (registry key, Gate API, Kafka); DDL trên đích dùng table_targets.
+        specs.append({**spec, "tables": [s for s, _ in entries], "table_targets": dict(entries)})
     return specs, errors
 
 
@@ -157,6 +196,7 @@ def build_pairs(pairs_config: list[dict]) -> list[dict]:
             "source_engine": _build_engine(p["source"], name, "source"),
             "target_engine": _build_engine(target_spec, name, "target") if target_spec else None,
             "tables": p["tables"],
+            "table_targets": p.get("table_targets", {}),
             "detection": p.get("detection", {}),
             "last_run": 0
         })

@@ -14,6 +14,7 @@ from pathlib import Path
 import yaml
 
 from app import runtime_status
+from app.event_log import event_logger
 from app.kafka_consumer import _topic_matches, run_cluster_consumer
 from app.scheduler import (
     DEFAULT_FALLBACK_INTERVAL, build_pairs, check_with_secrets, ensure_connected, load_pipeline_specs,
@@ -38,8 +39,10 @@ class PipelineWorker:
         self.kafka_cfg = {**(global_cfg.get("kafka") or {}), **(detection.get("kafka") or {})}
         self.topic = self.kafka_cfg.get("topic", self.name)
         self.bootstrap = self.kafka_cfg.get("bootstrap_servers", "localhost:19092")
+        # polling: chu kỳ riêng của pipeline (detection.interval_seconds), không có thì lấy mặc định chung.
         self.interval = (detection.get("fallback_polling_interval_seconds", DEFAULT_FALLBACK_INTERVAL)
-                         if self.event_driven else (global_cfg.get("scheduler") or {}).get("interval_seconds", 60))
+                         if self.event_driven else detection.get("interval_seconds")
+                         or (global_cfg.get("scheduler") or {}).get("interval_seconds", 60))
         pair = build_pairs([spec])[0]  # chỉ khởi tạo engine, chưa kết nối
         self.source, self.target = pair["source_engine"], pair["target_engine"]
         self.registry, self.notifier = registry, notifier
@@ -72,7 +75,8 @@ class PipelineWorker:
 
     def _check(self, table: str, source: str) -> dict:
         result = run_evolution_check(self.source, self.target, table, self.registry, self.notifier,
-                                     registry_key=make_registry_key(self.name, table))
+                                     registry_key=make_registry_key(self.name, table),
+                                     target_table=(self.spec.get("table_targets") or {}).get(table))
         print(f"[{self.name}] {table}: {result['status']} ({source})")
         log_detected_change(self.name, table, result, source=source)
         return result
@@ -150,6 +154,7 @@ class PipelineManager:
             raise ValueError(f"{self.config_path}: {'; '.join(problems)}")
         self.global_cfg = cfg
         self.registry = SchemaRegistry(cfg["registry"]["dir"])
+        event_logger.persist_to(Path(cfg["registry"]["dir"]) / "_events.jsonl")  # cùng chỗ với lịch sử schema
         self.notifier = self._make_notifier(cfg)
         self.workers: dict[str, PipelineWorker] = {}
         self.errors: dict[str, str] = {}  # tên file pipeline -> lỗi cấu hình

@@ -1,5 +1,7 @@
+import json
 import threading
 from collections import deque
+from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -8,6 +10,27 @@ class EventLog:
         self._events = deque(maxlen=max_size)
         self._lock = threading.Lock()
         self._counter = 0
+        self._path: Path | None = None
+
+    def persist_to(self, path) -> None:
+        """Ghi mọi sự kiện ra file JSONL và nạp lại lịch sử gần nhất (khởi động lại không mất timeline)."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock:
+            self._path = path
+            lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
+            events = []
+            for line in lines:
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    continue  # dòng ghi dở khi tiến trình bị tắt đột ngột
+            self._events.clear()
+            self._events.extendleft(events[-self._events.maxlen:])  # mới nhất đứng đầu, như appendleft
+            self._counter = max((e.get("id", 0) for e in events), default=0)
+            if len(lines) > 20000:
+                # shortcut: chỉ giữ 2000 sự kiện gần nhất trong file; cần lưu lâu hơn thì đẩy sang DB/log hệ thống.
+                path.write_text("".join(json.dumps(e) + "\n" for e in events[-2000:]), encoding="utf-8")
 
     def add_event(self, pipeline_name: str, table_name: str, ddl: str, status: str, severity: str = "non_breaking") -> Dict[str, Any]:
         with self._lock:
@@ -26,6 +49,12 @@ class EventLog:
                 "severity": severity,
             }
             self._events.appendleft(event)
+            if self._path is not None:
+                try:
+                    with self._path.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(event) + "\n")
+                except OSError as e:
+                    print(f"[EventLog] cannot persist event to {self._path}: {e}")  # không làm hỏng engine
             return event
 
     def get_events(self, limit: int = 50) -> List[Dict[str, Any]]:

@@ -38,6 +38,13 @@ NORMALIZED_TO_POSTGRES = {
 }
 
 
+
+def _split(table_name: str) -> tuple[str, str]:
+    """"sales.orders" -> ("orders", "sales"); "orders" -> ("orders", "public")."""
+    schema, _, name = table_name.rpartition(".")
+    return name, schema or "public"
+
+
 class PostgresEngine(BaseEngine):
     @property
     def engine_type(self) -> str:
@@ -65,10 +72,11 @@ class PostgresEngine(BaseEngine):
             return False
 
     def list_tables(self) -> list[str]:
+        # Bảng của schema public giữ tên trơn, schema khác trả về "schema.table" (đúng cú pháp trong config).
         query = """
-        SELECT table_name
+        SELECT CASE WHEN table_schema = 'public' THEN table_name ELSE table_schema || '.' || table_name END
         FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+        WHERE table_type = 'BASE TABLE' AND table_schema NOT IN ('pg_catalog', 'information_schema')
         """
         with self.connection.cursor() as cur:
             cur.execute(query)
@@ -96,11 +104,11 @@ class PostgresEngine(BaseEngine):
         SELECT column_name, data_type, is_nullable, column_default, character_maximum_length,
                numeric_precision, numeric_scale
         FROM information_schema.columns
-        WHERE table_name = %s AND table_schema = 'public'
+        WHERE table_name = %s AND table_schema = %s
         ORDER BY ordinal_position
         """
         with self.connection.cursor() as cur:
-            cur.execute(query, (table_name,))
+            cur.execute(query, _split(table_name))
             rows = cur.fetchall()
 
         columns = []
@@ -128,11 +136,11 @@ class PostgresEngine(BaseEngine):
             AND tc.table_schema = kcu.table_schema
         WHERE tc.constraint_type = 'PRIMARY KEY'
             AND tc.table_name = %s
-            AND tc.table_schema = 'public'
+            AND tc.table_schema = %s
         ORDER BY kcu.ordinal_position
         """
         with self.connection.cursor() as cur:
-            cur.execute(query, (table_name,))
+            cur.execute(query, _split(table_name))
             return [row[0] for row in cur.fetchall()]
 
     def _crawl_foreign_keys(self, table_name: str) -> list[ForeignKeySchema]:
@@ -156,10 +164,10 @@ class PostgresEngine(BaseEngine):
             AND rc.constraint_schema = tc.table_schema
         WHERE tc.constraint_type = 'FOREIGN KEY'
             AND tc.table_name = %s
-            AND tc.table_schema = 'public'
+            AND tc.table_schema = %s
         """
         with self.connection.cursor() as cur:
-            cur.execute(query, (table_name,))
+            cur.execute(query, _split(table_name))
             rows = cur.fetchall()
 
         fks = []

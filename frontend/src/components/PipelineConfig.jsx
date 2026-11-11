@@ -3,6 +3,9 @@ import { Sliders, Server, Plus, Edit2, Trash2, X, Save, RefreshCw, Layers, Searc
 import { useToast } from './NotificationToast';
 import { useLanguage } from '../context/LanguageContext';
 
+// Mục trong tables: "orders" | "sales.orders" | {source, target} -> chữ hiển thị/sửa trên form.
+const tableText = (t) => (typeof t === 'string' ? t : `${t.source} -> ${t.target}`);
+
 export default function PipelineConfig() {
   const { t } = useLanguage();
   const [pipelines, setPipelines] = useState([]);
@@ -20,6 +23,7 @@ export default function PipelineConfig() {
     name: '',
     detectionMode: 'polling',
     kafkaTopic: '',
+    intervalSeconds: '',
     sourceType: 'postgres',
     sourceHost: 'localhost',
     sourcePort: 5432,
@@ -66,6 +70,7 @@ export default function PipelineConfig() {
         name: pipeline.name || '',
         detectionMode: pipeline.detection?.mode || 'polling',
         kafkaTopic: pipeline.detection?.kafka?.topic || pipeline.name || '',
+        intervalSeconds: pipeline.detection?.interval_seconds ?? '',
         sourceType: pipeline.source?.type || 'postgres',
         sourceHost: pipeline.source?.config?.host || 'localhost',
         sourcePort: pipeline.source?.config?.port || 5432,
@@ -78,7 +83,7 @@ export default function PipelineConfig() {
         targetDb: pipeline.target?.config?.dbname ?? pipeline.target?.config?.database ?? '',
         targetUser: pipeline.target?.config?.user || '',
         targetPassword: pipeline.target?.config?.password || '',
-        tables: (pipeline.tables || []).join(', ')
+        tables: (pipeline.tables || []).map(tableText).join(', ')
       });
     } else {
       setEditingPipeline(null);
@@ -86,6 +91,7 @@ export default function PipelineConfig() {
         name: '',
         detectionMode: 'polling',
         kafkaTopic: '',
+        intervalSeconds: '',
         sourceType: 'postgres',
         sourceHost: 'localhost',
         sourcePort: 5432,
@@ -146,7 +152,11 @@ export default function PipelineConfig() {
 
   const handleSavePipeline = (e) => {
     e.preventDefault();
-    const tableList = formData.tables.split(',').map(t => t.trim()).filter(Boolean);
+    // "sales.orders -> orders_raw" = bảng đích đặt tên khác nguồn.
+    const tableList = formData.tables.split(',').map(t => t.trim()).filter(Boolean).map(tok => {
+      const [source, target] = tok.split('->').map(x => x.trim());
+      return target ? { source, target } : source;
+    });
     // Bắt đầu từ cấu hình đang có (bỏ trường _ chỉ dùng cho UI) rồi ghi đè phần form quản lý.
     const base = editingPipeline
       ? JSON.parse(JSON.stringify(Object.fromEntries(Object.entries(editingPipeline).filter(([k]) => !k.startsWith('_')))))
@@ -157,6 +167,11 @@ export default function PipelineConfig() {
       detection.kafka = { ...(detection.kafka || {}), topic: formData.kafkaTopic.trim() || formData.name };
     } else {
       delete detection.kafka;
+    }
+    if (formData.detectionMode === 'polling' && String(formData.intervalSeconds).trim() !== '') {
+      detection.interval_seconds = Number(formData.intervalSeconds);
+    } else {
+      delete detection.interval_seconds;
     }
 
     const payload = {
@@ -472,8 +487,8 @@ export default function PipelineConfig() {
                     <td>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                         {pipe.tables?.map(tItem => (
-                          <span key={tItem} className="pill" style={{ fontFamily: 'var(--mono)', borderRadius: '4px' }}>
-                            {tItem}
+                          <span key={tableText(tItem)} className="pill" style={{ fontFamily: 'var(--mono)', borderRadius: '4px' }}>
+                            {tableText(tItem)}
                           </span>
                         ))}
                       </div>
@@ -554,7 +569,7 @@ export default function PipelineConfig() {
               {/* Detection Section */}
               <div style={{ background: 'var(--body-bg)', padding: '14px', borderRadius: '8px', marginBottom: '16px', border: '1px solid var(--border-color)' }}>
                 <h4 style={{ margin: '0 0 10px 0', fontSize: '0.8rem', color: '#f59e0b', fontWeight: 700, textTransform: 'uppercase' }}>{t('detection_section_title')}</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: formData.detectionMode === 'event_driven' ? '1fr 1fr' : '1fr', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                   <div>
                     <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('detection_mode_label')}</label>
                     <select
@@ -566,6 +581,19 @@ export default function PipelineConfig() {
                       <option value="event_driven">{t('event_driven_kafka')}</option>
                     </select>
                   </div>
+                  {formData.detectionMode === 'polling' && (
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('polling_interval_label')}</label>
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder={String(systemConfig?.scheduler?.interval_seconds || 60)}
+                        value={formData.intervalSeconds}
+                        onChange={e => setFormData({ ...formData, intervalSeconds: e.target.value })}
+                        style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+                      />
+                    </div>
+                  )}
                   {formData.detectionMode === 'event_driven' && (
                     <div>
                       <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('kafka_cdc_topic_label')}</label>

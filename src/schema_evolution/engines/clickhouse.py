@@ -41,17 +41,25 @@ NORMALIZED_TO_CLICKHOUSE = {
     "float": "Float32",
     "double": "Float64",
     "boolean": "Bool",
-    "date": "Date",
-    "timestamp": "DateTime",
-    "timestamptz": "DateTime",
+    "date": "Date32",  # Date chỉ từ 1970: ngày sinh/ngày cũ hơn bị ghi thành 1970-01-01
+    # Micro giây = độ chính xác tối đa của Postgres/MySQL -> không mất phần dưới giây.
+    "timestamp": "DateTime64(6)",
+    "timestamptz": "DateTime64(6, 'UTC')",
     "uuid": "UUID",
-    "numeric": "Float64",  
-    "json": "String",       
+    # NUMERIC không ghi precision: Float64 làm tròn tiền tệ -> dùng Decimal rộng nhất.
+    # shortcut: giá trị >38 chữ số phần nguyên bị ClickHouse từ chối (lỗi rõ ràng, không làm tròn ngầm).
+    "numeric": "Decimal(76, 38)",
+    "json": "String",
 }
 
 SANDBOX_SAMPLE_ROWS = 10000
 
 FIXED_STRING_RE = re.compile(r"^FixedString\((\d+)\)$")
+
+def _q(identifier: str) -> str:
+    """Tên cột trong backtick: cột như unit-price/order không làm hỏng câu DDL."""
+    return "`" + identifier.replace("`", "``") + "`"
+
 
 class ClickHouseEngine(BaseEngine): 
     @property
@@ -154,9 +162,7 @@ class ClickHouseEngine(BaseEngine):
         base_type = NORMALIZED_TO_CLICKHOUSE.get(column.data_type, "String")
         if column.data_type == "numeric" and column.precision:
             base_type = f"Decimal({min(column.precision, 76)},{column.scale or 0})"
-        # Chỉ char(n) mới là độ dài cố định; varchar(n) -> FixedString sẽ đệm byte 0 vào chuỗi ngắn.
-        if column.max_length and column.data_type == "char":
-            base_type = f"FixedString({column.max_length})"
+        # char(n)/varchar(n) -> String: FixedString(n) tính theo BYTE (tiếng Việt UTF-8 bị cắt/NULL) và đệm byte 0.
         if column.nullable: 
             return f"Nullable({base_type})"
         return base_type
@@ -171,21 +177,26 @@ class ClickHouseEngine(BaseEngine):
                 default_sql = f" DEFAULT {default}" if default is not None else ""
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
-                    f"ADD COLUMN {col.name} {type_sql}{default_sql}"
+                    f"ADD COLUMN {_q(col.name)} {type_sql}{default_sql}"
                 )
             elif change.change_type == ChangeType.WIDEN_TYPE:
                 col = change.new_value
                 type_sql = self._render_type(col)
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
-                    f"MODIFY COLUMN {change.column_name} {type_sql}"
+                    f"MODIFY COLUMN {_q(change.column_name)} {type_sql}"
                 )
             elif change.change_type == ChangeType.NOT_NULL_TO_NULLABLE:
-                col = change.new_value
-                type_sql = self._render_type(col)  # col.nullable đã là True
+                # Giữ đúng kiểu đang có ở đích (VD UInt32 tạo tay), chỉ thêm Nullable: dựng lại kiểu
+                # từ registry có thể đổi UInt32 -> Int32 và làm 4294967295 thành -1.
+                current = self._current_type(change.table_name, change.column_name)
+                if current is None:
+                    type_sql = self._render_type(change.new_value)  # col.nullable đã là True
+                else:
+                    type_sql = current if current.startswith("Nullable(") else f"Nullable({current})"
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
-                    f"MODIFY COLUMN {change.column_name} {type_sql}"
+                    f"MODIFY COLUMN {_q(change.column_name)} {type_sql}"
                 )
             elif change.change_type == ChangeType.DROP_FOREIGN_KEY:
                 # ClickHouse không có FK -> không bao giờ thực sự phát sinh
@@ -199,25 +210,25 @@ class ClickHouseEngine(BaseEngine):
                 old_name = change.column_name
                 new_name = change.new_value.name if hasattr(change.new_value, 'name') else str(change.new_value)
                 statements.append(
-                    f"ALTER TABLE {change.table_name} RENAME COLUMN {old_name} TO {new_name}"
+                    f"ALTER TABLE {change.table_name} RENAME COLUMN {_q(old_name)} TO {_q(new_name)}"
                 )
             elif change.change_type == ChangeType.DROP_COLUMN:
                 statements.append(
-                    f"ALTER TABLE {change.table_name} DROP COLUMN {change.column_name}"
+                    f"ALTER TABLE {change.table_name} DROP COLUMN {_q(change.column_name)}"
                 )
             elif change.change_type in (ChangeType.NARROW_TYPE, ChangeType.CHANGE_TYPE_INCOMPATIBLE):
                 col = change.new_value
                 type_sql = self._render_type(col)
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
-                    f"MODIFY COLUMN {change.column_name} {type_sql}"
+                    f"MODIFY COLUMN {_q(change.column_name)} {type_sql}"
                 )
             elif change.change_type == ChangeType.NULLABLE_TO_NOT_NULL:
                 col = change.new_value
                 type_sql = self._render_type(col)  # col.nullable đã là False
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
-                    f"MODIFY COLUMN {change.column_name} {type_sql}"
+                    f"MODIFY COLUMN {_q(change.column_name)} {type_sql}"
                 )
             elif change.change_type == ChangeType.ADD_FOREIGN_KEY:
                 # ClickHouse không có FK -> nếu gặp trường hợp này (không nên
@@ -234,6 +245,18 @@ class ClickHouseEngine(BaseEngine):
                 )
         return statements
  
+    def _current_type(self, table: str, column: str) -> str | None:
+        """Kiểu thật của cột ở đích (None nếu chưa kết nối/không thấy)."""
+        if self.connection is None:
+            return None
+        database, _, name = table.rpartition(".")
+        rows = self.connection.query(
+            "SELECT type FROM system.columns WHERE database = if(%(d)s = '', currentDatabase(), %(d)s) "
+            "AND table = %(t)s AND name = %(c)s",
+            parameters={"d": database, "t": name, "c": column},
+        ).result_rows
+        return rows[0][0] if rows else None
+
     def execute_ddl(self, ddl_statement: str) -> None:
         if ddl_statement.startswith("--"):
             return  # no-op, không gửi lên server

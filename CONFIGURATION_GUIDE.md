@@ -65,9 +65,34 @@ target:
 
 # 3. DANH SÁCH BẢNG CẦN THEO DÕI
 tables:
-  - users
-  - payments
+  - users                       # bảng đích cùng tên
+  - sales.orders                # Postgres: schema khác public -> bảng đích "orders"
+  - source: sales.order_items   # bảng đích đặt tên khác nguồn
+    target: order_items_raw
+
+# 4. CÁCH PHÁT HIỆN THAY ĐỔI (tuỳ chọn, mặc định polling theo scheduler.interval_seconds)
+detection:
+  mode: polling
+  interval_seconds: 300         # chu kỳ quét riêng của pipeline này
 ```
+
+**Engine không tạo bảng đích.** Lúc khai báo pipeline, bảng đích phải có sẵn và khớp nguồn (việc nạp dữ liệu ban đầu là của ETL). Lần quét đầu tiên engine lấy schema nguồn hiện tại làm baseline (v1), từ đó mới theo dõi thay đổi.
+
+Tên bảng chỉ gồm chữ, số, `_ $ -` và tối đa một dấu chấm (`schema.table`), vì tên đi thẳng vào câu DDL. Hai bảng nguồn không được đổ vào cùng một bảng đích.
+
+**Kiểu dữ liệu khi tự đồng bộ không làm mất dữ liệu.** Đã kiểm chứng trên Postgres, MySQL và Mongo thật:
+
+| Nguồn | ClickHouse | MySQL (đích) | Lý do |
+|---|---|---|---|
+| `TIMESTAMP`, `TIMESTAMPTZ`, `DATETIME(n)` | `DateTime64(6)`, `DateTime64(6, 'UTC')` | `DATETIME(6)` | Giữ micro giây (`DateTime` thường làm mất phần dưới giây) |
+| `NUMERIC` không ghi precision | `Decimal(76, 38)` | `DECIMAL(65,30)` | `Float64` làm tròn tiền; `DECIMAL` thường của MySQL là `(10,0)` |
+| `DATE` | `Date32` | `DATE` | `Date` của ClickHouse chỉ từ năm 1970 |
+| `CHAR(n)`, `VARCHAR(n)` | `String` | giữ nguyên | `FixedString(n)` đếm byte nên cắt chữ tiếng Việt |
+| MySQL `INT UNSIGNED`, `BIGINT UNSIGNED` | `Int64`, `Decimal(20,0)` | | Lên kiểu có dấu rộng hơn một bậc, không tràn số |
+
+Nếu DDL tự động chạy lỗi trên đích (sai quyền, kiểu không chuyển được), bảng **bị freeze và có cảnh báo** như một thay đổi breaking. Engine không báo "đã đồng bộ" khi đích thật ra chưa đổi.
+
+**Nguồn MongoDB (không có schema):** kiểu cột được suy ra từ 10.000 document mới nhất. Field không có trong mẫu **không** bị coi là đã xóa, và mẫu toàn số nhỏ **không** bị coi là thu hẹp kiểu, nên không có freeze giả. Field là object/array lồng nhau được lưu dạng chuỗi JSON; field con mới bên trong không được theo dõi riêng.
 
 > [!TIP]
 > Không cần khởi động lại API server. **PipelineManager** ([`app/pipeline_manager.py`](app/pipeline_manager.py)) quét `config/pipelines/` mỗi 3 giây:
@@ -95,7 +120,8 @@ TELEGRAM_BOT_TOKEN=123456:ABC...
 - **Engine chỉ thay giá trị thật lúc tạo kết nối.** Giá trị thật không bao giờ bị ghi ngược ra YAML, và API/UI chỉ thấy `${...}`.
 - **Thiếu biến** (ví dụ chưa khai báo `EXCHANGE_PG_PASSWORD`): chỉ pipeline đó báo lỗi `missing secret(s): ...`, các pipeline khác vẫn chạy. Khi lưu qua UI, tham chiếu tới biến chưa có cũng bị chặn.
 - **Sửa `secrets.env` có hiệu lực trong khoảng 3 giây**, không cần khởi động lại. Chỉ những pipeline dùng biến vừa đổi mới được nạp lại.
-- **Bí mật viết thẳng kiểu cũ** vẫn chạy được, nhưng UI sẽ hiện `********`. Lưu lại mà không sửa thì giá trị cũ được giữ nguyên, không bị ghi thành chuỗi `********`.
+- **Gõ mật khẩu thật trên Web UI cũng an toàn:** khi lưu, API tự chuyển giá trị vào `config/secrets.env` và YAML chỉ nhận tham chiếu. Tên biến theo vị trí: pipeline `shop_sales` + `source.config.password` thành `${SHOP_SALES_SOURCE_PASSWORD}`; `telegram.bot_token` trong `main.yaml` thành `${TELEGRAM_BOT_TOKEN}`. Lưu lại chỗ đó thì cập nhật đúng biến đó. Xóa pipeline thì biến vẫn nằm lại trong `secrets.env`, cần dọn tay.
+- **Bí mật viết thẳng trong YAML kiểu cũ** vẫn chạy được, UI hiện `********`. Lần lưu tiếp theo qua UI sẽ chuyển nó sang `secrets.env`.
 
 ### Sửa cấu hình qua Web UI (trang Configuration)
 
@@ -116,7 +142,7 @@ Theo cách Prometheus, Nginx và Airflow làm, cấu hình được chia hai lo�
 |---|---|---|
 | `config/pipelines/*.yaml` | runtime | Pipeline mới chạy, pipeline sửa nạp lại, pipeline xoá dừng |
 | `main.yaml` → `telegram` | runtime | Dùng token/chat mới ngay, không động tới worker |
-| `main.yaml` → `kafka`, `scheduler` | runtime | Các worker và Kafka consumer khởi động lại với giá trị mới. `scheduler.interval_seconds` chỉ áp dụng cho pipeline `polling`; pipeline `event_driven` dùng `fallback_polling_interval_seconds` của riêng nó |
+| `main.yaml` → `kafka`, `scheduler` | runtime | Các worker và Kafka consumer khởi động lại với giá trị mới. `scheduler.interval_seconds` là chu kỳ mặc định cho pipeline `polling` không khai báo `detection.interval_seconds`; pipeline `event_driven` dùng `fallback_polling_interval_seconds` của riêng nó |
 | `main.yaml` → `registry.dir` | **bootstrap** | **Không áp dụng** khi đang chạy (đổi chỗ lưu trạng thái giữa chừng có thể làm mất trạng thái freeze/draft). UI báo "needs a restart". Khởi động lại backend để áp dụng |
 
 **File mới bị lỗi thì giữ cấu hình cũ (last-known-good):** nếu `main.yaml` bị gõ hỏng, engine **tiếp tục chạy bằng cấu hình hợp lệ gần nhất**, và UI hiện thẻ "main: Config error" kèm lý do. Sửa lại file là lỗi tự biến mất. Lúc **khởi động** mà `main.yaml` đã lỗi thì engine dừng và báo lỗi rõ ràng, vì khi đó chưa có cấu hình nào chạy tốt để giữ lại.
@@ -170,6 +196,11 @@ source:
 
 > [!NOTE]
 > Engine tạo **một Kafka consumer cho mỗi cluster**. Consumer chỉ chuyển message tới worker của pipeline tương ứng, việc kiểm tra schema chạy trong worker đó. Vì vậy một pipeline chậm không làm chậm các pipeline khác dùng chung cluster. Thêm hoặc bớt pipeline thì consumer tự cập nhật danh sách topic. Nhiều pipeline có thể dùng chung một `topic` (cùng một Debezium connector): message được chuyển tới **mọi** pipeline có khai báo bảng đó trong `tables`, pipeline không khai báo thì bỏ qua.
+
+> [!IMPORTANT]
+> **Message phải là JSON** (`value.converter=org.apache.kafka.connect.json.JsonConverter`). Nên bật `value.converter.schemas.enable=true`: khi đó cả thay đổi kiểu (độ dài, precision) cũng được phát hiện trong khoảng 2 giây. Không có schema thì chỉ thêm, xóa, đổi tên cột được phát hiện ngay; đổi kiểu phải chờ lần quét dự phòng. Avro/Protobuf (Schema Registry) chưa được hỗ trợ: engine ghi **một** cảnh báo cho mỗi topic và topic đó chỉ còn được phát hiện qua quét dự phòng.
+
+**Lịch sử sự kiện** (Live CDC Event Stream, các lần Approve/Reject) được lưu vào `<registry.dir>/_events.jsonl`, nên khởi động lại backend không mất timeline.
 
 ### C. Chạy engine
 Engine tự chạy cùng API server (`uvicorn api.main:app --port 8000`). Muốn chạy engine độc lập, không kèm API:

@@ -37,9 +37,11 @@ def _resolve_tables(raw_name: str | None, pair: dict) -> list[str]:
     configured = pair.get("tables", [])
     if not raw_name:
         return list(configured)
-    name = raw_name.split(".")[-1].strip().strip('"`[]').strip()
+    parts = [p.strip().strip('"`[]').strip() for p in raw_name.split(".")]
+    name, qualified = parts[-1].lower(), ".".join(parts[-2:]).lower()
     for t in configured:
-        if t.lower() == name.lower():
+        # "sales.orders" trong config phải khớp cả schema; tên trơn chỉ so phần tên bảng.
+        if t.lower() == (qualified if "." in t else name):
             return [t]
     return []
 
@@ -51,6 +53,8 @@ def _extract_raw_table(payload: dict, ddl) -> str | None:
         if table_changes and table_changes[0].get("id"):
             return table_changes[0]["id"]
         return source.get("table")
+    if source.get("schema") and source.get("table"):
+        return f"{source['schema']}.{source['table']}"  # Debezium Postgres: giữ schema để phân biệt sales.orders
     return (
         payload.get("table") or payload.get("table_name")
         or source.get("collection") or source.get("table")
@@ -71,6 +75,21 @@ def _schema_fingerprint(data: dict, data_dict) -> str | None:
     return hashlib.sha1(json.dumps(basis, sort_keys=True).encode()).hexdigest()
 
 
+_unreadable_topics: set[str] = set()
+
+
+def _warn_unreadable(message) -> None:
+    """Báo 1 lần mỗi topic (không spam log mỗi message): engine chỉ đọc được JSON."""
+    if message.topic in _unreadable_topics:
+        return
+    _unreadable_topics.add(message.topic)
+    # Byte đầu 0x00 = wire format của Confluent Schema Registry (Avro/Protobuf/JSON Schema).
+    kind = "Schema Registry (Avro/Protobuf)" if message.value[:1] == b"\x00" else "not JSON"
+    print(f"[Kafka Consumer] {message.topic}: message format {kind} is not supported -> "
+          f"set value.converter=org.apache.kafka.connect.json.JsonConverter on the connector. "
+          f"Until then this topic's schema changes are caught only by fallback polling.")
+
+
 def route_message(message, workers: list) -> None:
     """Xác định pipeline + bảng của message rồi báo cho worker (không chạy kiểm tra ở đây)."""
     # Nhiều pipeline có thể dùng chung 1 topic prefix (1 Debezium connector/DB, mỗi pipeline vài bảng):
@@ -78,7 +97,14 @@ def route_message(message, workers: list) -> None:
     candidates = [w for w in workers if w.matches(message.topic)]
     if not candidates:
         return
-    data = json.loads(message.value.decode("utf-8"))
+    try:
+        data = json.loads(message.value.decode("utf-8"))
+    except ValueError:  # gồm UnicodeDecodeError: Avro/Protobuf nhị phân
+        _warn_unreadable(message)
+        return
+    if not isinstance(data, dict):
+        _warn_unreadable(message)
+        return
     payload = data.get("payload", data)
     if not isinstance(payload, dict):
         return
