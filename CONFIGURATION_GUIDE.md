@@ -263,6 +263,7 @@ components:
 - **`kafka_connect`:**
   - Có bảng nào trong `tables` bị freeze thì engine `PUT /connectors/{name}/pause`. Mọi bảng mở lại thì `PUT .../resume`.
   - Task bị `FAILED` lúc đang freeze sẽ được restart khi resume (`POST .../restart?includeTasks=true&onlyFailed=true`).
+  - Engine vừa tự `ALTER` bảng đích của component (thay đổi không breaking) thì trong 30 giây sau đó, task FAILED được restart một lần. Lý do: sink có thể nhận message schema mới trước khi `ALTER` xong.
   - Khoảng 2 giây một lần, engine đối chiếu trạng thái thật của connector. Vì vậy cách gỡ freeze nào cũng có tác dụng: approve, reject, nguồn tự rollback, `unfreeze_cli`. Engine khởi động lại cũng không ảnh hưởng.
   - Không gọi được Kafka Connect trong lúc bảng đang freeze thì engine gửi cảnh báo Telegram 1 lần và ghi vào Live Events.
 - **Mỗi connector chỉ khai báo ở một pipeline, và một lần.** Nếu hai pipeline cùng điều khiển một connector, chúng sẽ pause và resume ngược nhau liên tục (đã thấy khi chạy thật). File nạp sau sẽ bị báo lỗi cấu hình. Một connector ghi bảng của hai pipeline thì nên tách thành hai connector, hoặc gom các bảng vào một pipeline.
@@ -272,6 +273,17 @@ components:
   - Lúc mở: sink ghi khoảng 3.700 dòng/giây.
   - Freeze: connector bị pause sau 0,17 giây, ghi 0 dòng trong 10 giây.
   - Gỡ freeze: connector chạy lại sau 1,54 giây và ghi tiếp.
+
+**Sink ghi vào bảng có schema cố định (như JDBC sink).** Mẫu dùng trong demo (pipeline `market_tickers_replica`):
+- Đặt `schema.evolution: none` cho sink.
+- Tạo một pipeline có `target` chính là DB của sink, để engine tự quản lý schema bảng đó (tự `ALTER` khi không breaking, chờ duyệt khi breaking).
+
+Mẫu này đã chạy thật với `add_column`, `widen` và `DROP COLUMN` (cả rollback lẫn approve).
+
+**Hạn chế: RENAME với sink có schema cố định.** Kafka Connect chỉ commit offset định kỳ, nên sau khi resume, sink đọc lại các message trước lúc đổi tên, vẫn mang tên cột cũ. Bảng đích đã đổi tên, nên task chết. Loader tự viết thì tránh được nhờ `column_renames` của Gate API. Với Kafka Connect thì chưa có cách tự động:
+- SMT `ReplaceField` không giúp được khi nguồn là Debezium bật `column.propagate.source.type`. Mỗi field mang tham số `__debezium.source.column.name` giữ tên cũ, và Debezium JDBC sink lấy tên cột từ tham số đó (đã kiểm chứng).
+- **Cách xử lý tay:** khi duyệt RENAME, thay vì đổi tên trên bảng của sink, hãy thêm cột mới và giữ cột cũ (cho phép NULL). Khi sink đã xử lý hết message cũ (lag về 0), chép dữ liệu từ cột cũ sang cột mới rồi xoá cột cũ.
+- Để engine tự làm việc này (migration expand/contract) là việc để sau.
 
 ---
 

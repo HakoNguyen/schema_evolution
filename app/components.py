@@ -15,6 +15,7 @@ PAUSED, không thì chạy. Mỗi lượt đọc trạng thái thật rồi sử
 reject, nguồn tự rollback, unfreeze_cli ở tiến trình khác), engine khởi động lại hay ai đó resume tay
 khi đang freeze đều được xử lý như nhau.
 """
+import time
 from urllib.parse import quote
 
 import requests
@@ -23,6 +24,7 @@ from app import runtime_status
 from app.event_log import event_logger
 
 TIMEOUT = 3
+SYNC_RESTART_WINDOW_SECONDS = 30  # sink có thể báo FAILED vài giây sau khi engine ALTER xong
 # Trạng thái consumer group (Kafka DescribeGroups) -> trạng thái hiện trên UI
 GROUP_STATE = {"Stable": "running", "PreparingRebalance": "starting", "CompletingRebalance": "starting",
                "Empty": "stopped", "Dead": "stopped"}
@@ -38,8 +40,12 @@ class KafkaConnectControl:
         resp.raise_for_status()
         return resp
 
-    def enforce(self, frozen: bool) -> tuple[str | None, str, int]:
-        """Đưa connector về trạng thái mong muốn. Trả về (việc đã làm, trạng thái trước đó, số task FAILED)."""
+    def enforce(self, frozen: bool, restart_failed: bool = False) -> tuple[str | None, str, int]:
+        """
+        Đưa connector về trạng thái mong muốn. Trả về (việc đã làm, trạng thái trước đó, số task FAILED).
+        restart_failed: engine vừa tự đồng bộ schema đích -> task chết vì message schema mới tới trước
+        lúc ALTER xong thì restart (offset chưa commit, message được ghi lại).
+        """
         status = self._call("GET", "/status").json()
         state = status["connector"]["state"]
         failed = sum(t.get("state") == "FAILED" for t in status.get("tasks", []))
@@ -51,6 +57,9 @@ class KafkaConnectControl:
             if failed:  # task chết vì message schema mới tới trước lúc kịp pause; resume không cứu task FAILED
                 self._call("POST", "/restart?includeTasks=true&onlyFailed=true")
             return "resumed", state, failed
+        if not frozen and failed and restart_failed:
+            self._call("POST", "/restart?includeTasks=true&onlyFailed=true")
+            return "restarted", state, failed
         return None, state, failed
 
 
@@ -105,6 +114,11 @@ class ObservedComponent:
         self.connect = KafkaConnectControl(kc["url"], kc["connector"]) if kc else None
         self.group = spec.get("kafka_group")
         self.alerted = False  # đã cảnh báo không pause được chưa (tránh gửi lại mỗi lượt)
+        self.restart_until = 0.0  # tới lúc này: task FAILED được restart 1 lần (sau khi engine tự ALTER đích)
+
+    def mark_synced(self) -> None:
+        """Worker vừa tự ALTER bảng đích của component: lỗi sink ngay sau đó nhiều khả năng do message tới sớm."""
+        self.restart_until = time.monotonic() + SYNC_RESTART_WINDOW_SECONDS
 
     def observe(self, frozen_tables: list[str], notifier, lag: LagReader | None) -> None:
         report = {"state": "running", "role": self.role, "metrics": {"observed_by": "engine"}, "message": ""}
@@ -125,7 +139,7 @@ class ObservedComponent:
     def _control(self, frozen_tables: list[str], notifier, report: dict) -> None:
         frozen = bool(frozen_tables)
         try:
-            action, state, failed = self.connect.enforce(frozen)
+            action, state, failed = self.connect.enforce(frozen, time.monotonic() < self.restart_until)
         except (requests.RequestException, KeyError, ValueError) as e:
             report.update(state="failed", message=f"Kafka Connect '{self.connect.connector}': {e}")
             if frozen and not self.alerted:  # bảng đã freeze mà sink vẫn ghi: phải có người xử lý
@@ -138,14 +152,17 @@ class ObservedComponent:
                 notifier.send_message(f"⚠️ <b>{self.pipeline}</b>: {text}")
             return
         self.alerted = False
+        if action == "restarted":
+            self.restart_until = 0.0  # chỉ 1 lần: chết tiếp là lỗi khác, để người xem
         if action:
-            why = f"{', '.join(frozen_tables)} frozen" if frozen else "all tables open"
-            extra = f", restarted {failed} failed task(s)" if action == "resumed" and failed else ""
+            why = (f"{', '.join(frozen_tables)} frozen" if frozen else "target schema just synced"
+                   if action == "restarted" else "all tables open")
+            extra = f", restarted {failed} failed task(s)" if action in ("resumed", "restarted") and failed else ""
             print(f"[{self.pipeline}] kafka_connect {self.connect.connector}: {action} ({why}{extra})")
             event_logger.add_event(self.pipeline, ", ".join(frozen_tables or self.tables),
                                    f"[kafka_connect] {action.capitalize()} connector '{self.connect.connector}' ({why}{extra})",
                                    f"sink_{action}", severity="non_breaking")
-            state, failed = ("PAUSED", failed) if action == "paused" else ("RUNNING", 0)
+            state, failed = ("PAUSED", failed) if action == "paused" else ("RUNNING" if action == "resumed" else state, 0)
         report["state"] = "failed" if failed or state == "FAILED" else "paused" if state == "PAUSED" else "running"
         report["metrics"].update(connector_state=state, failed_tasks=failed)
         if frozen:

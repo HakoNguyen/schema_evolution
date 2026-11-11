@@ -93,6 +93,10 @@ class PipelineWorker:
                                      target_table=(self.spec.get("table_targets") or {}).get(table))
         print(f"[{self.name}] {table}: {result['status']} ({source})")
         log_detected_change(self.name, table, result, source=source)
+        if result["status"] == "changes_applied":
+            for comp in self.observed:
+                if table in comp.tables:
+                    comp.mark_synced()
         return result
 
     def _connect(self) -> None:

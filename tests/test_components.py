@@ -108,6 +108,14 @@ def test_pause_when_frozen_resume_and_restart_failed_when_open():
         assert len(FakeConnect.calls) == 3, "chỉ restart task khi chính engine resume"
         assert _component("p3", "trades-sink")["state"] == "failed"
         assert notifier.sent == []
+
+        comp.mark_synced()  # engine vừa ALTER đích (add_column): message mới tới sink trước lúc ALTER xong
+        comp.observe([], notifier, None)
+        assert FakeConnect.calls[3:] == [("POST", "/connectors/trades%20jdbc/restart?includeTasks=true&onlyFailed=true")]
+        assert _component("p3", "trades-sink")["state"] == "running"
+        FakeConnect.tasks = ["FAILED"]  # chết tiếp: lỗi khác, không restart vòng lặp
+        comp.observe([], notifier, None)
+        assert len(FakeConnect.calls) == 4
     finally:
         srv.shutdown()
     print("[PASS] test_pause_when_frozen_resume_and_restart_failed_when_open")

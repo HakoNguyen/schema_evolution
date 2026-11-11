@@ -41,3 +41,12 @@ REGISTRY_DIR = "data/registry"  # khớp registry.dir trong config/main.yaml
 # Pipeline 2 (chạy song song với market_trades): cùng DB nguồn, cùng Debezium connector, khác bảng.
 TICKERS_PIPELINE = "market_tickers"
 TICKERS_TABLE = "tickers"
+
+# Pipeline 3 (mức 3): sink Kafka Connect có sẵn (Debezium JDBC sink) chép tickers sang Postgres replica.
+# Sink chỉ ghi dữ liệu (schema.evolution=none); engine giữ schema bảng replica và pause/resume sink theo freeze.
+# Chọn tickers (không phải trades): kịch bản rename của trades làm sink cố định schema chết khi đọc lại
+# message cũ — xem CONFIGURATION_GUIDE mục 5.
+REPLICA_PIPELINE = "market_tickers_replica"
+REPLICA_DB = "exchange_replica"
+SINK_CONNECTOR_NAME = "market-tickers-replica"
+SINK_GROUP = f"connect-{SINK_CONNECTOR_NAME}"  # consumer group Kafka Connect tự đặt cho sink

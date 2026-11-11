@@ -67,6 +67,8 @@ class PostgresEngine(BaseEngine):
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
+            # autocommit=False: SELECT 1 mở transaction; không đóng thì kết nối "idle in transaction" mãi giữa các lần quét.
+            self.connection.rollback()
             return True
         except Exception:
             return False
