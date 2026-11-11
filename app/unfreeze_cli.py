@@ -12,6 +12,7 @@ Ví dụ:
   python -m app.unfreeze_cli approve pg_to_mysql/customers
 """
 
+import getpass
 import sys
 import json
 from pathlib import Path
@@ -149,7 +150,7 @@ def main():
             print(f"  [ERROR] Loi khi ap dung DDL len Target (bang van frozen): {result.get('errors')}")
 
         if result["status"] == "approved":
-            notifier.notify_change_reviewed(table_name, approved=True, pair_name=pair_name)
+            notifier.notify_change_reviewed(table_name, approved=True, pair_name=pair_name, by=f"{getpass.getuser()} (CLI)")
             print(f"  [NOTIFY] Da gui thong bao Phe duyyet thanh cong len Telegram!")
 
     elif action == "reject":
@@ -160,7 +161,7 @@ def main():
         ok = registry.reject_change(registry_key)
         print(f"\n[CLI] Tu choi thay doi '{registry_key}': {'Thanh cong' if ok else 'That bai'}")
         if ok:
-            notifier.notify_change_reviewed(table_name, approved=False, pair_name=pair_name)
+            notifier.notify_change_reviewed(table_name, approved=False, pair_name=pair_name, by=f"{getpass.getuser()} (CLI)")
             print(f"  [NOTIFY] Da giu nguyen Baseline cu & gui thong bao Tu choi len Telegram!")
 
     else:

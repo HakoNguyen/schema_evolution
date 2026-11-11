@@ -11,6 +11,12 @@ _NOW_DEFAULTS = {"current_timestamp", "now()", "current_timestamp()", "localtime
 _NOW_FN_RE = re.compile(r"^(current_timestamp|now|localtimestamp)\(\d*\)$", re.IGNORECASE)
 
 
+def sandbox_table(table: str) -> str:
+    """Bảng clone cho sandbox, ở database mặc định: 'analytics.orders' -> '__sandbox_analytics_orders'
+    (nếu giữ dấu chấm, '__sandbox_analytics' bị hiểu thành tên database không tồn tại)."""
+    return "__sandbox_" + table.replace(".", "_")
+
+
 def render_portable_default(raw: Any, now_sql: str = "CURRENT_TIMESTAMP") -> Optional[str]:
     """
     Chuẩn hoá giá trị default crawl được từ DB nguồn thành literal SQL dùng

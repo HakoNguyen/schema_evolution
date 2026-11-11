@@ -52,3 +52,6 @@ demo/recordings/
 
 # Bí mật thật (token, mật khẩu) — KHÔNG commit. Mẫu: config/secrets.env.example
 config/secrets.env
+
+# File tạm khi ghi cấu hình/bí mật (chỉ còn lại nếu tiến trình bị tắt giữa chừng)
+config/**/*.tmp

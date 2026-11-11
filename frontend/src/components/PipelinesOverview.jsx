@@ -11,7 +11,7 @@ const HISTORY = 60; // ~2 phút ở POLL_MS
 const STATE_TONE = {
   running: 'success', ok: 'success',
   hold: 'warning', paused: 'warning', warn: 'warning', starting: 'warning',
-  failed: 'danger', error: 'danger',
+  failed: 'danger', error: 'danger', missing: 'danger',
   stopped: 'muted', stale: 'muted',
 };
 const toneColor = (tone) => ({ success: 'var(--success-color)', warning: 'var(--warning-color)', danger: 'var(--danger-color)' }[tone] || 'var(--text-dim)');
@@ -68,7 +68,7 @@ function ComponentTile({ comp, history }) {
       )}
       {history?.length > 1 && <Sparkline values={history} />}
       {comp.message && <div style={{ fontSize: '0.78rem', color: toneColor(STATE_TONE[comp.state]) === 'var(--text-dim)' ? 'var(--text-muted)' : toneColor(STATE_TONE[comp.state]) }}>{comp.message}</div>}
-      <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{t('ov_reported_ago').replace('{s}', Math.round(comp.age_seconds))}</div>
+      {comp.age_seconds != null && <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{t('ov_reported_ago').replace('{s}', Math.round(comp.age_seconds))}</div>}
     </div>
   );
 }

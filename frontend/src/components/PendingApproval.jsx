@@ -33,7 +33,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
         addToast(action === 'approve' ? t('toast_approved') : t('toast_rejected'), "success");
         onResolved();
       } else {
-        addToast(`${t('toast_action_failed')}: ${data.message || ''}`, "error");
+        addToast(`${t('toast_action_failed')}: ${data.message || (typeof data.detail === 'string' ? data.detail : '')}`, "error");
       }
     } catch (err) {
       console.error(err);
@@ -52,7 +52,7 @@ export default function PendingApproval({ registryKey, onResolved }) {
         setIsSandboxTested(true);
         addToast(t('toast_sandbox_ok'), "success");
       } else {
-        addToast(`${t('toast_sandbox_failed')}: ${data.message || ''}`, "error");
+        addToast(`${t('toast_sandbox_failed')}: ${data.message || (typeof data.detail === 'string' ? data.detail : '')}`, "error");
       }
     } catch (err) {
       console.error(err);

@@ -69,6 +69,8 @@ tables:
   - sales.orders                # Postgres: schema khác public -> bảng đích "orders"
   - source: sales.order_items   # bảng đích đặt tên khác nguồn
     target: order_items_raw
+  # Có target: tên bảng đích chỉ gồm chữ, số, _ (đi thẳng vào ALTER TABLE). Nguồn tên "my-table"
+  # thì ánh xạ: {source: my-table, target: my_table}.
 
 # 4. CÁCH PHÁT HIỆN THAY ĐỔI (tuỳ chọn, mặc định polling theo scheduler.interval_seconds)
 detection:
@@ -234,3 +236,82 @@ POST /api/pipelines/{pipeline}/components/{name}
 - `state` gợi ý: `running` / `ok` (xanh), `hold` / `paused` (vàng), `failed` / `error` (đỏ). Thành phần im lặng quá 15 giây sẽ hiện là `stale`.
 - `metrics`: tối đa 30 giá trị đơn (số, chuỗi, bool). Trang **Pipelines Overview** hiển thị nguyên các giá trị này; chỉ số `rows_per_sec` có thêm sparkline.
 - Ví dụ hoàn chỉnh: [`demo/loader.py`](demo/loader.py) (`Reporter`, `FreezeGate`) và [`demo/check.py`](demo/check.py) (`report`).
+- Khi engine bật xác thực (mục 6), gửi kèm `Authorization: Bearer <token vai reporter>`. Loader demo đọc token từ biến môi trường `DEMO_ENGINE_TOKEN`.
+
+---
+
+## 5. Sink có sẵn, không sửa được code (khai báo `components:`)
+
+Gate API và Reporting API cần sửa code của sink. Với sink có sẵn như Kafka Connect, bạn chỉ cần khai báo trong YAML của pipeline:
+
+```yaml
+# config/pipelines/market_trades.yaml
+components:
+  - name: trades-sink                       # tên hiện trên Pipelines Overview
+    role: warehouse sink                    # tuỳ chọn
+    tables: [trades]                        # tuỳ chọn, mặc định là mọi bảng của pipeline
+    kafka_group: connect-trades-sink        # engine tự đo consumer lag (Kafka Connect: connect-<tên connector>)
+    kafka_connect:                          # engine tự pause/resume connector theo freeze
+      url: http://localhost:8083
+      connector: trades-sink
+  - name: spark-job                         # chỉ khai báo, tự báo cáo qua Reporting API
+    role: batch sink
+```
+
+- **Chỉ khai báo:** nếu chưa từng báo cáo thì component hiện `missing` (đỏ), thay vì không hiện gì.
+- **`kafka_group`:** khoảng 2 giây một lần, engine đọc lag và trạng thái group (`Stable` → `running`, `Empty` → `stopped`). Lag là tổng trên mọi partition group đang được giao hoặc đã commit. Partition chưa commit lần nào được tính từ đầu log, giống `rpk group describe`. Kafka lấy theo `detection.kafka` hoặc `kafka` trong `main.yaml`. Kafka Connect chỉ commit offset định kỳ (`offset.flush.interval.ms`, mặc định 60 giây), nên lag của sink Connect nhảy theo từng bậc.
+- **`kafka_connect`:**
+  - Có bảng nào trong `tables` bị freeze thì engine `PUT /connectors/{name}/pause`. Mọi bảng mở lại thì `PUT .../resume`.
+  - Task bị `FAILED` lúc đang freeze sẽ được restart khi resume (`POST .../restart?includeTasks=true&onlyFailed=true`).
+  - Khoảng 2 giây một lần, engine đối chiếu trạng thái thật của connector. Vì vậy cách gỡ freeze nào cũng có tác dụng: approve, reject, nguồn tự rollback, `unfreeze_cli`. Engine khởi động lại cũng không ảnh hưởng.
+  - Không gọi được Kafka Connect trong lúc bảng đang freeze thì engine gửi cảnh báo Telegram 1 lần và ghi vào Live Events.
+- **Mỗi connector chỉ khai báo ở một pipeline, và một lần.** Nếu hai pipeline cùng điều khiển một connector, chúng sẽ pause và resume ngược nhau liên tục (đã thấy khi chạy thật). File nạp sau sẽ bị báo lỗi cấu hình. Một connector ghi bảng của hai pipeline thì nên tách thành hai connector, hoặc gom các bảng vào một pipeline.
+- **Engine giữ quyền điều khiển connector đã khai báo.** Đừng resume tay khi bảng đang freeze, vì engine sẽ pause lại. Muốn tự điều khiển thì xoá mục `kafka_connect` khỏi YAML.
+- Nên đặt `errors.tolerance=none` cho sink. Từ lúc nguồn đổi schema tới lúc pause (đo được dưới 1 giây) có thể có message schema mới lọt vào sink. Với `none`, task sẽ `FAILED` và giữ offset (được restart khi resume). Với `all`, message đó bị bỏ qua và mất.
+- Kiểm chứng ngày 11/11/2026 với JDBC sink thật trên Kafka Connect 3.8:
+  - Lúc mở: sink ghi khoảng 3.700 dòng/giây.
+  - Freeze: connector bị pause sau 0,17 giây, ghi 0 dòng trong 10 giây.
+  - Gỡ freeze: connector chạy lại sau 1,54 giây và ghi tiếp.
+
+---
+
+## 6. Xác thực API (tuỳ chọn)
+
+Chưa khai báo `auth` thì API mở như trước. Khai báo `auth` trong `config/main.yaml` (nạp lại khi đang chạy) thì:
+
+```yaml
+auth:
+  users:
+    hieu:                                    # tên này được ghi vào lịch sử duyệt và Telegram
+      role: admin                            # mọi lệnh ghi: approve, reject, sandbox, sửa cấu hình
+      token: ${AUTH_USERS_HIEU_TOKEN}
+    loader:
+      role: reporter                         # chỉ Reporting API, dùng cho data plane
+      token: ${AUTH_USERS_LOADER_TOKEN}
+```
+
+- Lệnh ghi (POST, PUT, DELETE) cần header `Authorization: Bearer <token>`. Thiếu hoặc sai token thì trả 401. Token `reporter` gọi lệnh khác thì trả 403.
+- Lệnh đọc (GET), gồm cả Gate API và giao diện, vẫn mở.
+- Token dài ít nhất 16 ký tự, mỗi người một token. Đặt `${VAR}` trong khối `{...}` thì phải có dấu nháy: `token: '${VAR}'`.
+- Trên giao diện, lần đầu bấm Approve, Reject hay Save sẽ có hộp thoại hỏi token. Token được lưu trong trình duyệt.
+- Approve và Reject ghi `by <tên>` vào Live Events (lưu trong `_events.jsonl`) và vào tin Telegram. `unfreeze_cli` ghi tên user hệ điều hành.
+- Trạng thái component được lưu vào `<registry.dir>/_components.json`, nên khởi động lại vẫn thấy trạng thái cuối (hiện `stale` cho tới khi có báo cáo mới).
+
+---
+
+## 7. Nâng cấp từ bản trước mức 1 (commit `b0596aa`)
+
+Mức 1 đổi cách chuẩn hoá một số kiểu của **nguồn MySQL và MongoDB**, để dữ liệu sang đích không bị sai:
+
+| Nguồn | Kiểu cũ trong baseline | Kiểu mới |
+|---|---|---|
+| MySQL `INT UNSIGNED` | `int` | `bigint` |
+| MySQL `BIGINT UNSIGNED` | `bigint` | `numeric(20,0)` |
+| MySQL `MEDIUMINT` | `mediumint` | `int` |
+| Mongo field có cả int và double (hoặc int32 và int64) | `json` | `double` (hoặc `bigint`) |
+
+Baseline tạo trước bản này sẽ thấy các cột trên "đổi kiểu" ở lần quét đầu tiên:
+- `INT UNSIGNED` (`int` → `bigint`) là nới rộng, nên engine tự `ALTER` đích. Đó cũng chính là bản sửa lỗi `4294967295` thành `-1`.
+- Ba trường hợp còn lại bị phân loại là đổi kiểu không tương thích, nên bảng bị freeze để chờ duyệt một lần. Freeze là hướng an toàn, không mất dữ liệu. Bạn có thể Approve (sau sandbox) hoặc xoá baseline của bảng đó trong `registry.dir` để engine khởi tạo lại.
+
+Nguồn Postgres không bị ảnh hưởng.

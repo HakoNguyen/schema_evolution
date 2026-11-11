@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Demo chỉ nói chuyện với engine qua HTTP (Gate API + Reporting API), không đọc file nội bộ của engine.
 ENGINE_API = os.getenv("DEMO_ENGINE_API", "http://localhost:8000")
+ENGINE_TOKEN = os.getenv("DEMO_ENGINE_TOKEN")  # token vai reporter khi engine bật auth.users
 
 PG = {
     "host": os.getenv("DEMO_PG_HOST", "localhost"),
