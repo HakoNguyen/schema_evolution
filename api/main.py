@@ -2,7 +2,8 @@
 from fastapi import FastAPI, HTTPException, Request
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import hmac
 import re
@@ -272,8 +273,14 @@ def get_pipeline_topology():
         pipelines.append({"name": Path(file_name).stem, "file": file_name, "config_error": error, "tables": []})
     return pipelines
 
-@app.get("/")
+# Bản đóng gói (Dockerfile): giao diện đã build nằm ở frontend/dist và được phục vụ cùng cổng với API.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+@app.get("/", include_in_schema=False)
 def read_root():
+    if (FRONTEND_DIST / "index.html").is_file():
+        return FileResponse(FRONTEND_DIST / "index.html")
     return {"message": "Schema Evolution API is running! Please access the frontend Web App at http://localhost:5173"}
 
 @app.get("/api/tables")
@@ -644,5 +651,10 @@ def delete_pipeline_config(name: str):
         raise HTTPException(status_code=404, detail=f"{name}.yaml not found")
     target_file.unlink()
     return {"status": "success", "message": f"Deleted {name}.yaml — the engine stops monitoring within ~3s"}
+
+
+# Phải mount SAU mọi route /api: mount ở "/" bắt mọi đường dẫn còn lại (file JS/CSS của giao diện).
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST), name="frontend")
 
 
