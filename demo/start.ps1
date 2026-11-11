@@ -10,7 +10,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $py = Join-Path $root 'venv\Scripts\python.exe'
 Set-Location $root
 
-docker info *> $null
+# Redirect inside cmd: a docker WARNING on stderr must not abort the script (PowerShell 5.1 + 'Stop').
+cmd /c "docker info >nul 2>&1"
 if ($LASTEXITCODE -ne 0) { throw 'Docker is not running. Start Docker Desktop first.' }
 
 Write-Host '[1/4] infrastructure (Postgres, ClickHouse, Redpanda, Debezium)'
