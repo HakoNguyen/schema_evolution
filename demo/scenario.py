@@ -8,19 +8,44 @@ Các bước kịch bản demo: chạy DDL trên nguồn (vai dev) và đo thờ
     python -m demo.scenario rollback      # dev hoàn tác narrow -> engine tự gỡ freeze
     python -m demo.scenario tickers_drop     # pipeline 2: breaking -> CHỈ market_tickers bị freeze
     python -m demo.scenario tickers_restore  # dev thêm lại cột -> engine tự gỡ freeze market_tickers
+    python -m demo.scenario orders_add_field   # Mongo: app ghi thêm field -> tự thêm cột ở ClickHouse
+    python -m demo.scenario orders_drop_field  # Mongo: app thôi ghi 1 field -> KHÔNG freeze giả
+    python -m demo.scenario orders_bad_type    # Mongo: app lỗi ghi số thành chuỗi -> freeze, chờ duyệt
+    python -m demo.scenario orders_fix         # Mongo: rollback app + sửa document xấu -> engine tự gỡ freeze
 
-Thời gian đo = từ lúc ALTER commit trên Postgres đến lúc warehouse có schema mới
-(non-breaking) hoặc registry chuyển sang frozen (breaking).
+Thời gian đo = từ lúc thay đổi có hiệu lực ở nguồn (ALTER commit trên Postgres, hoặc app Mongo
+chuyển sang bản mới) đến lúc warehouse có schema mới (non-breaking) hoặc registry chuyển sang
+frozen (breaking).
 """
 import argparse
 import time
 
 import clickhouse_connect
 import psycopg2
+import pymongo
 import requests
 
 import demo  # noqa: F401  (UTF-8 console)
 from demo import config as c
+
+
+def _release(**flags):
+    """Mongo không có DDL: "đổi schema" = deploy bản app ghi document hình dạng khác (xem demo.orders_app)."""
+    return lambda db: db[c.RELEASE_COLLECTION].update_one({"_id": c.ORDERS_APP}, {"$set": flags})
+
+
+def _fix_bad_amounts(db) -> None:
+    # Engine chỉ kiểm tra lại khi cấu trúc message đổi. Nên: dừng app, sửa hết document xấu, rồi mới chạy
+    # bản đúng -> message mang cấu trúc đúng đầu tiên chỉ đến SAU khi dữ liệu đã sạch.
+    _release(paused=True)(db)
+    time.sleep(1)  # app đọc bản đang chạy mỗi 0,2s
+    fixed = db[c.ORDERS_TABLE].update_many(
+        {"amount": {"$type": "string"}}, [{"$set": {"amount": {"$toDouble": "$amount"}}}]).modified_count
+    print(f"  đã sửa {fixed} document có amount là chuỗi")
+    _release(amount_as_string=False, paused=False)(db)
+
+
+_ORDERS = dict(pipeline=c.ORDERS_PIPELINE, table=c.ORDERS_TABLE)
 
 STEPS = {
     "add_column": dict(
@@ -61,6 +86,27 @@ STEPS = {
         expect="clear", pipeline=c.TICKERS_PIPELINE, table=c.TICKERS_TABLE,
         story="Dev thêm lại low_price -> nguồn khớp baseline, engine tự gỡ freeze market_tickers",
     ),
+    # Pipeline 3 (MongoDB, schemaless): "schema" là hình dạng document app đang ghi.
+    "orders_add_field": dict(
+        mongo=_release(coupon_code=True), show="app bản mới: mỗi đơn ghi thêm field coupon_code",
+        expect="target", column="coupon_code", **_ORDERS,
+        story="Team marketing cần biết đơn nào dùng mã giảm giá -> app ghi thêm coupon_code",
+    ),
+    "orders_drop_field": dict(
+        mongo=_release(note=False), show="app bản mới: thôi ghi field note",
+        expect="open", column="note", **_ORDERS,
+        story="App bỏ ô ghi chú. Với Mongo, field vắng KHÔNG có nghĩa là bị xoá -> không được freeze",
+    ),
+    "orders_bad_type": dict(
+        mongo=_release(amount_as_string=True), show='app bản lỗi: ghi amount thành chuỗi "12.50"',
+        expect="frozen", **_ORDERS,
+        story="Bản app lỗi ghi số tiền dạng chuỗi: cột amount ở warehouse sẽ hỏng nếu tự áp dụng",
+    ),
+    "orders_fix": dict(
+        mongo=_fix_bad_amounts, show="rollback app + đổi các amount chuỗi về số ($toDouble)",
+        expect="clear", **_ORDERS,
+        story="Dev rollback bản lỗi VÀ sửa document xấu -> nguồn khớp baseline, engine tự gỡ freeze",
+    ),
 }
 
 
@@ -87,19 +133,24 @@ def _gate(session: requests.Session, pipeline: str, table: str) -> dict | None:
 
 
 def run_step(step: str, s: dict, timeout: float) -> float | None:
-    """Chạy SQL của bước trên nguồn, trả về số giây tới khi engine phản ứng (None = quá timeout)."""
-    print(f"\n▶ {step}: {s['story']}\n  SQL: {s['sql']}")
+    """Thay đổi nguồn của bước (SQL Postgres hoặc thao tác Mongo), trả về số giây tới khi engine phản ứng (None = quá timeout)."""
+    print(f"\n▶ {step}: {s['story']}\n  " + (f"SQL: {s['sql']}" if "sql" in s else f"Mongo: {s['show']}"))
     ch = clickhouse_connect.get_client(**c.CH)
     session = requests.Session()
     pipeline, table = s.get("pipeline", c.PIPELINE_NAME), s.get("table", c.SOURCE_TABLE)
 
-    pg = psycopg2.connect(**c.PG)
-    pg.autocommit = True
-    with pg.cursor() as cur:
-        cur.execute("SET lock_timeout = '5s'")
-        cur.execute(s["sql"])
+    if "sql" in s:
+        pg = psycopg2.connect(**c.PG)
+        pg.autocommit = True
+        with pg.cursor() as cur:
+            cur.execute("SET lock_timeout = '5s'")
+            cur.execute(s["sql"])
+        pg.close()
+    else:
+        mongo = pymongo.MongoClient(**c.MONGO)
+        s["mongo"](mongo[c.MONGO_DB])
+        mongo.close()
     t0 = time.monotonic()
-    pg.close()
 
     while time.monotonic() - t0 < timeout:
         if s["expect"] == "target":
@@ -109,6 +160,16 @@ def run_step(step: str, s: dict, timeout: float) -> float | None:
                 print(f"  ✓ NON-BREAKING: warehouse tự đồng bộ ({s['column']} {typ}) sau {dt:.2f}s, luồng dữ liệu không dừng")
                 return dt
         elif (gate := _gate(session, pipeline, table)) is not None:
+            if s["expect"] == "open":
+                # Không có gì để chờ: trong 5 giây bảng phải luôn open và cột ở đích vẫn còn.
+                if gate["state"] == "frozen":
+                    print(f"  ✗ {pipeline}/{table} bị freeze: engine coi field vắng là bị xoá")
+                    return None
+                if time.monotonic() - t0 >= 5:
+                    typ = _target_type(ch, table, s["column"])
+                    print(f"  ✓ sau 5s bảng vẫn open, cột {s['column']} vẫn còn ở warehouse ({typ}); "
+                          f"đơn mới để trống cột này, luồng dữ liệu không dừng")
+                    return time.monotonic() - t0
             if s["expect"] == "clear" and gate["state"] == "open":
                 dt = time.monotonic() - t0
                 print(f"  ✓ nguồn đã khớp baseline, engine gỡ freeze sau {dt:.2f}s, loader chạy tiếp")

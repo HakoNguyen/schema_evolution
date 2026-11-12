@@ -47,6 +47,19 @@ def test_schemaless_falls_back_to_keys():
     print("[PASS] test_schemaless_falls_back_to_keys")
 
 
+def test_unwrapped_schema_catches_type_change():
+    # Mongo qua ExtractNewDocumentState: schema phẳng, không có "after". Cùng tập key nhưng amount
+    # đổi từ số sang chuỗi -> phải ra fingerprint khác, nếu không engine chỉ thấy khi quét định kỳ.
+    def msg(amount_type, amount):
+        schema = {"type": "struct", "fields": [{"field": "_id", "type": "string"},
+                                               {"field": "amount", "type": amount_type, "optional": True}]}
+        payload = {"_id": "ord-1", "amount": amount}
+        return _schema_fingerprint({"schema": schema, "payload": payload}, payload)
+    assert msg("double", 12.5) == msg("double", 99.0)
+    assert msg("double", 12.5) != msg("string", "12.50")
+    print("[PASS] test_unwrapped_schema_catches_type_change")
+
+
 def test_shared_topic_prefix_routes_to_owning_pipeline():
     import json
     from types import SimpleNamespace
@@ -110,4 +123,5 @@ if __name__ == "__main__":
     test_same_structure_same_fingerprint()
     test_ddl_changes_fingerprint()
     test_schemaless_falls_back_to_keys()
+    test_unwrapped_schema_catches_type_change()
     print("\nALL FINGERPRINT TESTS PASSED!")

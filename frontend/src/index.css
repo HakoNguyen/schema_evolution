@@ -263,6 +263,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   color: var(--text-main);
 }
 
+.icon-btn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
 .content-scroll {
   flex: 1;
   overflow-y: auto;

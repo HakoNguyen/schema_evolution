@@ -40,14 +40,17 @@ class MongoEngine(BaseEngine):
         user = self.connection_config.get("user")
         password = self.connection_config.get("password")
         database = self.connection_config["database"]
+        # Replica set trong Docker quảng bá host nội bộ (VD mongo_db:27017) mà máy ngoài không phân giải được:
+        # direct_connection: true -> nói chuyện thẳng với host:port đã cấu hình, không dò các member.
+        direct = bool(self.connection_config.get("direct_connection", False))
 
-        if user and password: 
+        if user and password:
             client = pymongo.MongoClient(
                 host=host, port=port, username=user, password=password,
-                serverSelectionTimeoutMS = 5000,
+                serverSelectionTimeoutMS = 5000, directConnection=direct,
             )
         else:
-            client = pymongo.MongoClient(host=host, port=port, serverSelectionTimeoutMS=5000)
+            client = pymongo.MongoClient(host=host, port=port, serverSelectionTimeoutMS=5000, directConnection=direct)
 
         self.connection = client
         self.db = client[database]

@@ -1,0 +1,11 @@
+{
+  "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+  "tasks.max": "1",
+  "mongodb.connection.string": "mongodb://mongo_db:27017/?replicaSet=rs0",
+  "topic.prefix": "mongo",
+  "collection.include.list": "shop\\.orders",
+  "capture.mode": "change_streams_update_full",
+  "snapshot.mode": "initial",
+  "transforms": "unwrap",
+  "transforms.unwrap.type": "io.debezium.connector.mongodb.transforms.ExtractNewDocumentState"
+}

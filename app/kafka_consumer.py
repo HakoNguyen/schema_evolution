@@ -65,10 +65,14 @@ def _schema_fingerprint(data: dict, data_dict) -> str | None:
     """
     Dấu vân tay cấu trúc của 1 message dữ liệu. Debezium (schemas.enable=true): hash phần
     schema của "after" -> đổi khi ADD/DROP/RENAME cột và khi đổi kiểu/precision/độ dài
-    (kèm column.propagate.source.type). Message không có schema (VD Mongo payload): hash tập key.
+    (kèm column.propagate.source.type). Bản ghi đã unwrap kèm schema phẳng (VD Mongo qua
+    ExtractNewDocumentState): hash cả schema -> bắt được field đổi kiểu (số -> chuỗi), không chỉ tập key.
+    Message không có schema: hash tập key.
     """
     schema = data.get("schema") if isinstance(data.get("schema"), dict) else None
     after = next((f for f in (schema or {}).get("fields", []) if f.get("field") == "after"), None)
+    if after is None and schema is not None:
+        after = schema
     basis = after if after is not None else (sorted(data_dict) if isinstance(data_dict, dict) else None)
     if basis is None:
         return None

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import LiveEventStream from './LiveEventStream';
 
@@ -80,10 +80,84 @@ function pipelineHealth(p) {
   return ['success', 'healthy'];
 }
 
+// Mới nhất trước (theo lúc engine bắt đầu theo dõi). Chưa có baseline (vừa khai báo, lỗi kết nối, lỗi cấu hình) coi là mới nhất.
+const newestFirst = (a, b) => (b.created_at || '9999').localeCompare(a.created_at || '9999');
+
+function PipelineCard({ p, onReview, history }) {
+  const { t } = useLanguage();
+  const [tone, label] = pipelineHealth(p);
+  const cdc = p.transport?.kind === 'broker';
+  return (
+    <section style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius)', padding: '16px 18px', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontWeight: 600, fontSize: '1rem' }}>{p.name}</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
+            {p.source?.type?.toUpperCase()} <ArrowRight size={11} /> {p.target?.configured ? p.target.type.toUpperCase() : t('source_only')} · {cdc ? 'Kafka CDC' : 'Polling'}
+          </span>
+        </div>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+          <span className="dot" style={{ color: toneColor(tone) }} />{t(label)}
+        </span>
+      </div>
+
+      <div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: 6 }}>{t('ov_tables')}</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {p.tables.map(tb => (
+            <span key={tb.name} className={`pill${tb.is_frozen ? ' warning' : ''}`} style={{ borderRadius: 6, padding: '4px 10px' }}>
+              <span className="dot" style={{ color: tb.is_frozen ? undefined : 'var(--success-color)' }} />
+              <span style={{ fontFamily: 'var(--mono)' }}>{tb.name}</span>
+              <span style={{ color: 'var(--text-dim)' }}>v{tb.version}</span>
+              {tb.is_frozen ? t('ov_gate_frozen') : t('ov_gate_open')}
+              {tb.is_frozen && onReview && (
+                <button className="btn-primary" style={{ padding: '2px 10px', fontSize: '0.75rem', marginLeft: 4 }} onClick={() => onReview(tb.registry_key)}>
+                  {t('review_approve')}
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: 6 }}>{t('ov_components')}</div>
+        {(p.components || []).length === 0 ? (
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+            {t('ov_no_components')} <code>POST /api/pipelines/{p.name}/components/&lt;name&gt;</code>
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
+            {p.components.map(comp => (
+              <ComponentTile key={comp.name} comp={comp} history={history[`${p.name}/${comp.name}`]} />
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function BrokenCard({ p }) {
+  const { t } = useLanguage();
+  return (
+    <section style={{ border: '1px solid var(--danger-border)', borderRadius: 'var(--radius)', padding: '14px 18px', background: 'var(--card-bg)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+        <span style={{ fontWeight: 600 }}>{p.name}</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+          <span className="dot" style={{ color: 'var(--danger-color)' }} />{t('config_error')}
+        </span>
+      </div>
+      <code style={{ display: 'block', fontSize: '0.75rem', color: 'var(--danger-color)', marginTop: 6, whiteSpace: 'pre-wrap' }}>{p.config_error}</code>
+    </section>
+  );
+}
+
 export default function PipelinesOverview({ onReview }) {
   const { t } = useLanguage();
   const [pipelines, setPipelines] = useState(null);
   const [error, setError] = useState(null);
+  const [selected, setSelected] = useState(null); // tên pipeline đang xem; null = luôn bám pipeline mới nhất
   const history = useRef({}); // "pipeline/component" -> rows_per_sec gần nhất
 
   useEffect(() => {
@@ -115,82 +189,39 @@ export default function PipelinesOverview({ onReview }) {
   const broken = pipelines.filter(p => p.config_error);
   const pending = monitored.reduce((n, p) => n + p.tables.filter(tb => tb.is_frozen).length, 0);
 
+  // Mỗi màn 1 pipeline. Pipeline đang xem bị xoá -> quay về mới nhất.
+  const all = [...pipelines].sort(newestFirst);
+  const idx = Math.max(0, all.findIndex(p => p.name === selected));
+  const current = all[idx];
+  const go = (i) => setSelected(i === 0 ? null : all[i].name); // về đầu danh sách = lại bám pipeline mới nhất
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div>
-        <h1 style={{ fontSize: '1.3rem', letterSpacing: '-0.02em' }}>{t('overview')}</h1>
-        <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginTop: 4 }}>
-          {t('ov_summary').replace('{n}', monitored.length).replace('{p}', pending).replace('{e}', broken.length)}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <h1 style={{ fontSize: '1.3rem', letterSpacing: '-0.02em' }}>{t('overview')}</h1>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', marginTop: 4 }}>
+            {t('ov_summary').replace('{n}', monitored.length).replace('{p}', pending).replace('{e}', broken.length)}
+          </div>
         </div>
+        {all.length > 1 && (
+          <nav aria-label={t('ov_pager')} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <button className="icon-btn" onClick={() => go(idx - 1)} disabled={idx === 0} aria-label={t('ov_newer')} title={t('ov_newer')}>
+              <ChevronLeft size={14} />
+            </button>
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{idx + 1} / {all.length}</span>
+            <button className="icon-btn" onClick={() => go(idx + 1)} disabled={idx === all.length - 1} aria-label={t('ov_older')} title={t('ov_older')}>
+              <ChevronRight size={14} />
+            </button>
+          </nav>
+        )}
       </div>
 
-      {monitored.length === 0 && broken.length === 0 && <div className="no-data">{t('ov_empty')}</div>}
+      {all.length === 0 && <div className="no-data">{t('ov_empty')}</div>}
 
-      {monitored.map(p => {
-        const [tone, label] = pipelineHealth(p);
-        const cdc = p.transport?.kind === 'broker';
-        return (
-          <section key={p.name} style={{ background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius)', padding: '16px 18px', boxShadow: 'var(--shadow)', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <span style={{ fontWeight: 600, fontSize: '1rem' }}>{p.name}</span>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', color: 'var(--text-dim)', fontFamily: 'var(--mono)' }}>
-                  {p.source?.type?.toUpperCase()} <ArrowRight size={11} /> {p.target?.configured ? p.target.type.toUpperCase() : t('source_only')} · {cdc ? 'Kafka CDC' : 'Polling'}
-                </span>
-              </div>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                <span className="dot" style={{ color: toneColor(tone) }} />{t(label)}
-              </span>
-            </div>
-
-            <div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: 6 }}>{t('ov_tables')}</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {p.tables.map(tb => (
-                  <span key={tb.name} className={`pill${tb.is_frozen ? ' warning' : ''}`} style={{ borderRadius: 6, padding: '4px 10px' }}>
-                    <span className="dot" style={{ color: tb.is_frozen ? undefined : 'var(--success-color)' }} />
-                    <span style={{ fontFamily: 'var(--mono)' }}>{tb.name}</span>
-                    <span style={{ color: 'var(--text-dim)' }}>v{tb.version}</span>
-                    {tb.is_frozen ? t('ov_gate_frozen') : t('ov_gate_open')}
-                    {tb.is_frozen && onReview && (
-                      <button className="btn-primary" style={{ padding: '2px 10px', fontSize: '0.75rem', marginLeft: 4 }} onClick={() => onReview(tb.registry_key)}>
-                        {t('review_approve')}
-                      </button>
-                    )}
-                  </span>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginBottom: 6 }}>{t('ov_components')}</div>
-              {(p.components || []).length === 0 ? (
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                  {t('ov_no_components')} <code>POST /api/pipelines/{p.name}/components/&lt;name&gt;</code>
-                </div>
-              ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 10 }}>
-                  {p.components.map(comp => (
-                    <ComponentTile key={comp.name} comp={comp} history={history.current[`${p.name}/${comp.name}`]} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </section>
-        );
-      })}
-
-      {broken.map(p => (
-        <section key={p.file} style={{ border: '1px solid var(--danger-border)', borderRadius: 'var(--radius)', padding: '14px 18px', background: 'var(--card-bg)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-            <span style={{ fontWeight: 600 }}>{p.name}</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-              <span className="dot" style={{ color: 'var(--danger-color)' }} />{t('config_error')}
-            </span>
-          </div>
-          <code style={{ display: 'block', fontSize: '0.75rem', color: 'var(--danger-color)', marginTop: 6, whiteSpace: 'pre-wrap' }}>{p.config_error}</code>
-        </section>
-      ))}
+      {current && (current.config_error
+        ? <BrokenCard p={current} />
+        : <PipelineCard p={current} onReview={onReview} history={history.current} />)}
 
       <LiveEventStream onReviewTable={onReview} />
     </div>

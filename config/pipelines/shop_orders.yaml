@@ -1,0 +1,25 @@
+name: shop_orders
+# Pipeline thứ ba: nguồn MongoDB (schemaless). Engine suy schema từ các document mới nhất;
+# "đổi schema" là app ghi document hình dạng khác (thêm field, đổi kiểu), không có ALTER.
+detection:
+  mode: event_driven
+  kafka:
+    topic: mongo                        # Debezium: mongo.shop.orders
+  fallback_polling_interval_seconds: 60
+source:
+  type: mongodb
+  config:
+    host: localhost
+    port: 27018                         # container mongo_db (27017 trên host thường là MongoDB cài sẵn)
+    database: shop
+    direct_connection: true             # replica set trong Docker quảng bá host mongo_db, máy ngoài không phân giải được
+target:
+  type: clickhouse
+  config:
+    host: localhost
+    port: 8123
+    user: default
+    password: ${ANALYTICS_CH_PASSWORD}
+    database: analytics
+tables:
+  - orders

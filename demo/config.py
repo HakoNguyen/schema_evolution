@@ -40,3 +40,18 @@ REGISTRY_DIR = "data/registry"  # khớp registry.dir trong config/main.yaml
 # Pipeline 2 (chạy song song với market_trades): cùng DB nguồn, cùng Debezium connector, khác bảng.
 TICKERS_PIPELINE = "market_tickers"
 TICKERS_TABLE = "tickers"
+
+# Pipeline 3: nguồn MongoDB (schemaless) -> cùng ClickHouse analytics. Container mongo_db map ra 27018.
+MONGO = {
+    "host": os.getenv("DEMO_MONGO_HOST", "localhost"),
+    "port": int(os.getenv("DEMO_MONGO_PORT", "27018")),
+    "directConnection": True,  # replica set quảng bá host nội bộ mongo_db:27017, máy ngoài không phân giải được
+    "serverSelectionTimeoutMS": 5000,
+}
+MONGO_DB = "shop"
+ORDERS_PIPELINE = "shop_orders"
+ORDERS_TABLE = "orders"
+ORDERS_TOPIC = "mongo.shop.orders"  # <topic.prefix>.<db>.<collection>
+ORDERS_CONNECTOR = "shop-orders-source"
+RELEASE_COLLECTION = "app_release"  # "bản app đang chạy": demo.scenario đổi, orders_app đọc
+ORDERS_APP = "orders-app"

@@ -176,7 +176,9 @@ def get_pipeline_topology():
                 "name": t_name,
                 "registry_key": key,
                 "is_frozen": is_frozen,
-                "version": version
+                "version": version,
+                # Lúc engine chụp baseline v1 = lúc bắt đầu theo dõi bảng (UI xếp pipeline mới nhất lên đầu).
+                "monitored_since": registry.get_version_timestamp(key, 1) if version else None,
             })
             
         detection = pair.get("detection", {})
@@ -239,6 +241,7 @@ def get_pipeline_topology():
                 "configured": target_type != "none"
             },
             "tables": tables,
+            "created_at": min((t["monitored_since"] for t in tables if t["monitored_since"]), default=None),
             "components": runtime_status.get_components(pair_name),
         })
     # File cấu hình lỗi: engine không giám sát nhưng vẫn hiện trên UI kèm lý do.
