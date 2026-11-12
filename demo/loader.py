@@ -32,6 +32,7 @@ import clickhouse_connect
 import requests
 from clickhouse_connect.driver.exceptions import ProgrammingError
 from kafka import KafkaConsumer
+from kafka.errors import CommitFailedError
 
 import demo  # noqa: F401  (UTF-8 console)
 from demo import config as c
@@ -313,7 +314,12 @@ def main():
             if tt:
                 last_lag = (datetime.now(timezone.utc) - tt).total_seconds()
         if polled:
-            consumer.commit()
+            try:
+                consumer.commit()
+            except CommitFailedError as e:
+                # Bị loại khỏi group (VD máy ngủ, tiến trình treo lâu): poll() kế tiếp tự vào lại group và nhận
+                # lại message chưa commit -> ghi lại, ReplacingMergeTree gộp bản trùng. Không mất dòng nào.
+                print(f"[{name}] commit failed, rejoining the group (uncommitted messages will be re-delivered): {e}")
         now = time.monotonic()
         while window and now - window[0][0] > RATE_WINDOW_SECONDS:
             window.popleft()
