@@ -12,6 +12,8 @@ import { useToast } from './components/NotificationToast';
 import { useLanguage } from './context/LanguageContext';
 import { Languages, Sun, Moon, ArrowLeft } from 'lucide-react';
 
+const POLL_MS = 2000; // cùng nhịp với Pipelines Overview và Live CDC Stream
+
 function App() {
   const [tables, setTables] = useState([]);
   const [activePage, setActivePage] = useState('data_flow'); // 'data_flow' | 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
@@ -21,7 +23,8 @@ function App() {
   const { addToast } = useToast();
   const { lang, toggleLanguage, t } = useLanguage();
 
-  const fetchTables = () => {
+  // silent: lần tự cập nhật định kỳ lỗi thì không bật toast (backend tắt sẽ spam mỗi 2 giây).
+  const fetchTables = (silent = false) => {
     fetch('/api/tables')
       .then(res => {
         if (!res.ok) throw new Error("HTTP error " + res.status);
@@ -30,7 +33,20 @@ function App() {
       .then(data => setTables(data))
       .catch(err => {
         console.error("Error fetching tables", err);
-        addToast(t('err_load_tables'), "error");
+        if (!silent) addToast(t('err_load_tables'), "error");
+      });
+  };
+
+  const fetchDetails = (key, silent = false) => {
+    fetch(`/api/tables/${key}`)
+      .then(res => {
+        if (!res.ok) throw new Error("HTTP error " + res.status);
+        return res.json();
+      })
+      .then(data => setDetails(data))
+      .catch(err => {
+        console.error("Error fetching details", err);
+        if (!silent) addToast(t('err_load_details'), "error");
       });
   };
 
@@ -43,17 +59,18 @@ function App() {
       setDetails(null);
       return;
     }
-    fetch(`/api/tables/${selectedKey}`)
-      .then(res => {
-        if (!res.ok) throw new Error("HTTP error " + res.status);
-        return res.json();
-      })
-      .then(data => setDetails(data))
-      .catch(err => {
-        console.error("Error fetching details", err);
-        addToast(t('err_load_details'), "error");
-      });
+    fetchDetails(selectedKey);
   }, [selectedKey, refreshTrigger]);
+
+  // Monitored Tables tự cập nhật (version mới, freeze / gỡ freeze) mà không cần F5.
+  useEffect(() => {
+    if (activePage !== 'monitored_tables') return;
+    const id = setInterval(() => {
+      fetchTables(true);
+      if (selectedKey) fetchDetails(selectedKey, true);
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, [activePage, selectedKey]);
 
   const selectedTable = selectedKey ? tables.find(t => t.registry_key === selectedKey) : null;
 

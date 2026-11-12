@@ -18,7 +18,9 @@ export default function TableDetails({ registryKey, details, refreshDetails }) {
         setVersionDetails(null);
       })
       .catch(err => console.error("Error fetching versions", err));
-  }, [registryKey, details]);
+    // Theo số version, không theo object details: details được tải lại mỗi 2 giây, nếu theo object thì
+    // lựa chọn version cũ trong dropdown bị xoá liên tục.
+  }, [registryKey, details?.version]);
 
   useEffect(() => {
     if (!registryKey || !selectedVersion) return;
