@@ -14,8 +14,8 @@ Set-Location $root
 cmd /c "docker info >nul 2>&1"
 if ($LASTEXITCODE -ne 0) { throw 'Docker is not running. Start Docker Desktop first.' }
 
-Write-Host '[1/4] infrastructure (Postgres, ClickHouse, Redpanda, Debezium)'
-docker compose up -d postgres_db clickhouse_db
+Write-Host '[1/4] infrastructure (Postgres, MongoDB, ClickHouse, Redpanda, Debezium)'
+docker compose up -d postgres_db mongo_db clickhouse_db
 docker compose -f debezium\docker-compose.yml up -d
 $deadline = (Get-Date).AddMinutes(3)
 while ($true) {
@@ -43,8 +43,11 @@ Open-Window 'ingestor' "& '$py' -m demo.ingestor $source"
 Open-Window 'loader' "& '$py' -m demo.loader"
 Open-Window 'naive-loader' "& '$py' -m demo.loader --naive"
 Open-Window 'tickers-loader' "& '$py' -m demo.loader --pipeline market_tickers --table tickers --time-column event_time"
+Open-Window 'orders-app' "& '$py' -m demo.orders_app"
+Open-Window 'orders-loader' "& '$py' -m demo.loader --pipeline shop_orders --table orders --topic mongo.shop.orders --time-column created_at"
 Open-Window 'check' "& '$py' -m demo.check --watch --report"
 
 Write-Host ''
 Write-Host 'Wait ~60s for the consumer groups to settle, then open http://localhost:5173 (Pipelines Overview).'
 Write-Host 'Scenario steps: python -m demo.scenario add_column | widen | rename | narrow | rollback | tickers_drop | tickers_restore'
+Write-Host 'MongoDB steps:  python -m demo.scenario orders_add_field | orders_drop_field | orders_bad_type | orders_fix'

@@ -4,6 +4,7 @@ Loader (data plane): topic CDC Debezium -> ClickHouse.
     python -m demo.loader           # pipeline có engine bảo vệ -> analytics.trades
     python -m demo.loader --naive   # pipeline đối chứng, không có engine -> analytics_naive.trades
     python -m demo.loader --pipeline market_tickers --table tickers --time-column event_time
+    python -m demo.loader --pipeline shop_orders --table orders --topic mongo.shop.orders --time-column created_at
 
 Dùng chung cho mọi bảng/pipeline (tham số), chỉ giao tiếp với engine qua Gate + Reporting API.
 
@@ -96,17 +97,36 @@ def parse_message(raw: bytes | None) -> dict | None:
         return None
     msg = json.loads(raw)
     payload, schema = msg.get("payload", msg), msg.get("schema")
-    if payload.get("op") not in ("c", "r", "u") or payload.get("after") is None:
-        return None  # trade là insert-only; delete không được nhân bản sang warehouse
-    after = payload["after"]
+    if "op" in payload:  # envelope Debezium (Postgres): before/after/op
+        if payload["op"] not in ("c", "r", "u") or payload.get("after") is None:
+            return None  # trade là insert-only; delete không được nhân bản sang warehouse
+        after = payload["after"]
+        schema = schema and next(f for f in schema["fields"] if f["field"] == "after")
+    else:  # đã unwrap (Mongo ExtractNewDocumentState): payload chính là document, schema phẳng
+        after = payload
     decoders = {}
     if schema:
-        after_schema = next(f for f in schema["fields"] if f["field"] == "after")
-        key = json.dumps(after_schema, sort_keys=True)
+        key = json.dumps(schema, sort_keys=True)
         if key not in _decoder_cache:
-            _decoder_cache[key] = {f["field"]: d for f in after_schema["fields"] if (d := _decoder(f))}
+            _decoder_cache[key] = {f["field"]: d for f in schema["fields"] if (d := _decoder(f))}
         decoders = _decoder_cache[key]
     return {k: (decoders[k](v) if v is not None and k in decoders else v) for k, v in after.items()}
+
+
+def coerce(value, ch_type: str):
+    """Nguồn Mongo không ép kiểu: chuỗi "12.50" vào cột số -> số; số vào cột String (sau khi duyệt đổi kiểu) -> chuỗi."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if "Decimal" in ch_type:
+            return Decimal(value)
+        if "Int" in ch_type:
+            return int(value)
+        if "Float" in ch_type:
+            return float(value)
+    elif "String" in ch_type:
+        return json.dumps(value, default=str) if isinstance(value, (dict, list)) else str(value)
+    return value
 
 
 def apply_renames(row: dict, renames: dict[str, str], target_columns: set[str]) -> dict:
@@ -119,15 +139,17 @@ def apply_renames(row: dict, renames: dict[str, str], target_columns: set[str]) 
 class ClickHouseTable:
     def __init__(self, client, table: str, status: Reporter | None = None, gate=None):
         self.client, self.table, self.status, self.gate = client, table, status, gate
+        self.types: dict[str, str] = {}  # cột đích -> kiểu ClickHouse
         self.columns: set[str] = set()
         self.refresh()
 
     def refresh(self):
         res = self.client.query(
-            "SELECT name FROM system.columns WHERE database = currentDatabase() AND table = %(t)s",
+            "SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = %(t)s",
             parameters={"t": self.table},
         )
-        self.columns = {r[0] for r in res.result_rows}
+        self.types = dict(res.result_rows)
+        self.columns = set(self.types)
 
     def write(self, rows: list[dict]) -> None:
         while True:
@@ -140,7 +162,9 @@ class ClickHouseTable:
             try:
                 for cols, grp in groups.items():
                     self._wait_for_columns(set(cols))
-                    self.client.insert(self.table, [[r[k] for k in cols] for r in grp], column_names=list(cols))
+                    types = [self.types[k] for k in cols]
+                    self.client.insert(self.table, [[coerce(r[k], t) for k, t in zip(cols, types)] for r in grp],
+                                       column_names=list(cols))
                 return
             except ProgrammingError as e:
                 if "Unrecognized column" not in str(e):
@@ -211,9 +235,10 @@ class FreezeGate:
             self.unreachable = True
         return self.frozen
 
-    def wait_until_open(self) -> None:
+    def wait_until_open(self) -> bool:
+        """Chờ tới khi bảng không còn bị freeze. True nếu đã phải chờ (schema đích có thể vừa đổi)."""
         if not self.check():
-            return
+            return False
         started = next_log = time.monotonic()
         while self.check():
             self.status.update("paused", message="table frozen: breaking change awaiting approval — data kept in Kafka",
@@ -224,6 +249,7 @@ class FreezeGate:
                 next_log += 5
             time.sleep(1)
         print(f"[loader] RESUME: bảng đã được mở lại sau {time.monotonic() - started:.1f}s")
+        return True
 
 
 def loader_group(table: str, naive: bool = False) -> str:
@@ -278,7 +304,8 @@ def main():
                     print(f"[{name}] task dừng hẳn — warehouse {database} không nhận thêm dữ liệu nào nữa.")
                     sys.exit(1)
             else:
-                gate.wait_until_open()
+                if gate.wait_until_open():
+                    table.refresh()  # thay đổi vừa được duyệt có thể đã đổi kiểu cột đích
                 table.write(rows)
             loaded += len(rows)
             window.append((time.monotonic(), len(rows)))

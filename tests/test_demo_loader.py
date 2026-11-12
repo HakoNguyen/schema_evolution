@@ -54,6 +54,33 @@ def test_parse_message():
     print("[PASS] test_parse_message")
 
 
+def test_parse_unwrapped_mongo_document():
+    # Debezium Mongo + ExtractNewDocumentState: payload là document, schema phẳng, ngày là Timestamp (ms).
+    schema = {"type": "struct", "fields": [
+        {"field": "_id", "type": "string"},
+        {"field": "amount", "type": "double", "optional": True},
+        {"field": "created_at", "type": "int64", "name": "org.apache.kafka.connect.data.Timestamp", "optional": True},
+    ]}
+    payload = {"_id": "ord-1", "amount": 12.5, "created_at": 1762850043777}
+    row = parse_message(json.dumps({"schema": schema, "payload": payload}).encode())
+    assert row == {"_id": "ord-1", "amount": 12.5,
+                   "created_at": datetime(2025, 11, 11, 8, 34, 3, 777000, tzinfo=timezone.utc)}
+    print("[PASS] test_parse_unwrapped_mongo_document")
+
+
+def test_coerce():
+    from demo.loader import coerce
+    assert coerce("12.50", "Nullable(Float64)") == 12.5            # app Mongo lỗi ghi số thành chuỗi
+    assert coerce("12.50", "Decimal(18, 8)") == Decimal("12.50")
+    assert coerce("7", "Nullable(Int64)") == 7
+    assert coerce(12.5, "Nullable(String)") == "12.5"              # sau khi duyệt đổi cột sang String
+    assert coerce({"a": 1}, "String") == '{"a": 1}'
+    assert coerce("BTCUSDT", "String") == "BTCUSDT"                # dữ liệu Postgres: không đổi gì
+    assert coerce(Decimal("1.5"), "Decimal(18, 8)") == Decimal("1.5")
+    assert coerce(None, "Nullable(Float64)") is None
+    print("[PASS] test_coerce")
+
+
 def test_clickhouse_varchar_is_string():
     render = ClickHouseEngine({})._render_type
     assert render(ColumnSchema("s", "varchar", False, max_length=20)) == "String"
@@ -86,6 +113,8 @@ if __name__ == "__main__":
     test_apply_renames()
     test_decode_decimal()
     test_parse_message()
+    test_parse_unwrapped_mongo_document()
+    test_coerce()
     test_clickhouse_varchar_is_string()
     test_bench_percentile()
     print("\nALL DEMO LOADER TESTS PASSED!")

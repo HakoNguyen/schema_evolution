@@ -39,11 +39,13 @@ Binance miniTicker ──► ingestor ──► exchange.public.tickers (UPSERT 
 | [`sql/source.sql`](sql/source.sql) | Bảng `trades` ở nguồn Postgres, schema v1 |
 | [`sql/warehouse.sql`](sql/warehouse.sql) | Bảng `analytics.trades` ở ClickHouse, schema v1 |
 | [`connector.json`](connector.json) | Cấu hình Debezium Postgres connector |
+| [`mongo_connector.json`](mongo_connector.json) | Cấu hình Debezium MongoDB connector (`shop.orders` → topic `mongo.shop.orders`) |
+| [`orders_app.py`](orders_app.py) | App bán hàng giả lập: ghi đơn vào MongoDB `shop.orders`; `scenario.py` đổi hình dạng document qua `shop.app_release` |
 | [`setup.py`](setup.py) | Tạo DB, bảng và connector. Thêm `--reset` để xóa sạch rồi dựng lại |
 | [`ingestor.py`](ingestor.py) | Binance → Postgres. Có `--record` (ghi lại) và `--replay` (phát lại) |
 | [`loader.py`](loader.py) | Kafka → ClickHouse (data plane). Có `--naive` cho pipeline đối chứng |
 | [`check.py`](check.py) | Đối chiếu nguồn với đích: số dòng, mất dòng, độ trễ, kèm pipeline đối chứng |
-| [`scenario.py`](scenario.py) | Các bước kịch bản: chạy `ALTER` trên nguồn và đo thời gian engine phản ứng |
+| [`scenario.py`](scenario.py) | Các bước kịch bản: chạy `ALTER` trên Postgres hoặc đổi bản app ghi Mongo, rồi đo thời gian engine phản ứng |
 | [`bench.py`](bench.py) | Đo cho báo cáo: `schema` (lặp N lần, p50/p95) và `soak` (chạy liên tục M phút) |
 | [`results/`](results/) | Kết quả đo dạng JSON, dùng làm bằng chứng cho báo cáo |
 | [`start.ps1`](start.ps1) | Khởi động toàn bộ demo bằng một lệnh, mỗi tiến trình một cửa sổ |
