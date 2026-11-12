@@ -105,16 +105,18 @@ class TelegramNotifier:
             [f"• {_describe(c)}" for c in changes],
         ))
 
-    def notify_change_reviewed(self, table_name: str, approved: bool, pair_name: str | None = None) -> bool:
+    def notify_change_reviewed(self, table_name: str, approved: bool, pair_name: str | None = None,
+                               by: str | None = None) -> bool:
         """Gửi khi kỹ sư bấm Approve/Reject (Web UI hoặc unfreeze_cli.py)."""
+        who = [f"Người duyệt: {_code(by)}"] if by else []
         if approved:
             return self.send_message(_message(
                 "🟢", "Đã duyệt", table_name, pair_name,
-                ["Thay đổi đã được áp dụng lên warehouse và ghi thành baseline mới. Bảng được mở lại."],
+                ["Thay đổi đã được áp dụng lên warehouse và ghi thành baseline mới. Bảng được mở lại.", *who],
             ))
         return self.send_message(_message(
             "⚪", "Đã từ chối", table_name, pair_name,
-            ["Baseline giữ nguyên. Cần rollback thay đổi ở nguồn, nếu không bảng sẽ bị đóng băng lại ở lần quét sau."],
+            ["Baseline giữ nguyên. Cần rollback thay đổi ở nguồn, nếu không bảng sẽ bị đóng băng lại ở lần quét sau.", *who],
         ))
 
     def notify_resolved_at_source(self, table_name: str, pair_name: str | None = None) -> bool:

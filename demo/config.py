@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Demo chỉ nói chuyện với engine qua HTTP (Gate API + Reporting API), không đọc file nội bộ của engine.
 ENGINE_API = os.getenv("DEMO_ENGINE_API", "http://localhost:8000")
+ENGINE_TOKEN = os.getenv("DEMO_ENGINE_TOKEN")  # token vai reporter khi engine bật auth.users
 
 PG = {
     "host": os.getenv("DEMO_PG_HOST", "localhost"),
@@ -41,7 +42,16 @@ REGISTRY_DIR = "data/registry"  # khớp registry.dir trong config/main.yaml
 TICKERS_PIPELINE = "market_tickers"
 TICKERS_TABLE = "tickers"
 
-# Pipeline 3: nguồn MongoDB (schemaless) -> cùng ClickHouse analytics. Container mongo_db map ra 27018.
+# Pipeline 3 (mức 3): sink Kafka Connect có sẵn (Debezium JDBC sink) chép tickers sang Postgres replica.
+# Sink chỉ ghi dữ liệu (schema.evolution=none); engine giữ schema bảng replica và pause/resume sink theo freeze.
+# Chọn tickers (không phải trades): kịch bản rename của trades làm sink cố định schema chết khi đọc lại
+# message cũ — xem CONFIGURATION_GUIDE mục 5.
+REPLICA_PIPELINE = "market_tickers_replica"
+REPLICA_DB = "exchange_replica"
+SINK_CONNECTOR_NAME = "market-tickers-replica"
+SINK_GROUP = f"connect-{SINK_CONNECTOR_NAME}"  # consumer group Kafka Connect tự đặt cho sink
+
+# Pipeline 4: nguồn MongoDB (schemaless) -> cùng ClickHouse analytics. Container mongo_db map ra 27018.
 MONGO = {
     "host": os.getenv("DEMO_MONGO_HOST", "localhost"),
     "port": int(os.getenv("DEMO_MONGO_PORT", "27018")),

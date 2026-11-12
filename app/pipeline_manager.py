@@ -21,10 +21,12 @@ from app.scheduler import (
     log_detected_change, validate_main_config,
 )
 from app.secret_store import load_env, secrets_path
+from app.components import LagReader, build_observed
 from src.schema_evolution.core import SchemaRegistry, make_registry_key, run_evolution_check
 from src.schema_evolution.notification import TelegramNotifier
 
 SYNC_SECONDS = 3
+COMPONENT_CHECK_SECONDS = 2  # gỡ freeze ở API/CLI -> connector chạy lại sau tối đa ~2s
 
 
 class PipelineWorker:
@@ -46,6 +48,9 @@ class PipelineWorker:
         pair = build_pairs([spec])[0]  # chỉ khởi tạo engine, chưa kết nối
         self.source, self.target = pair["source_engine"], pair["target_engine"]
         self.registry, self.notifier = registry, notifier
+        # Thành phần engine tự quan sát (kafka_group) / điều khiển (kafka_connect: pause/resume theo freeze).
+        self.observed = build_observed(spec)
+        self.lag = LagReader(self.bootstrap) if any(c.group for c in self.observed) else None
 
         self.seen: dict[str, str] = {}             # bảng -> fingerprint đã kiểm tra xong
         self._pending: dict[str, str | None] = {}  # bảng -> fingerprint chờ kiểm tra (None = bắt buộc)
@@ -53,6 +58,10 @@ class PipelineWorker:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name=f"pipeline-{self.name}")
+        # Thread riêng: Kafka Connect/broker treo (timeout vài giây) không được làm chậm việc phát hiện schema.
+        self._observe_now = threading.Event()
+        self._observer = (threading.Thread(target=self._observe_loop, daemon=True, name=f"observe-{self.name}")
+                          if self.observed else None)
 
     def matches(self, topic: str) -> bool:
         return _topic_matches(topic, self.topic) or _topic_matches(topic, self.name)
@@ -67,11 +76,16 @@ class PipelineWorker:
 
     def start(self) -> None:
         self._thread.start()
+        if self._observer is not None:
+            self._observer.start()
 
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+        self._observe_now.set()
         self._thread.join(timeout=15)
+        if self._observer is not None:
+            self._observer.join(timeout=15)
 
     def _check(self, table: str, source: str) -> dict:
         result = run_evolution_check(self.source, self.target, table, self.registry, self.notifier,
@@ -79,6 +93,10 @@ class PipelineWorker:
                                      target_table=(self.spec.get("table_targets") or {}).get(table))
         print(f"[{self.name}] {table}: {result['status']} ({source})")
         log_detected_change(self.name, table, result, source=source)
+        if result["status"] == "changes_applied":
+            for comp in self.observed:
+                if table in comp.tables:
+                    comp.mark_synced()
         return result
 
     def _connect(self) -> None:
@@ -101,6 +119,24 @@ class PipelineWorker:
                 errors.append(f"{table}: {e}")
                 print(f"[{self.name}] scan {table} failed: {e}")
         runtime_status.record_scan(self.name, ok=not errors, error="; ".join(errors) or None)
+
+    def _observe_components(self) -> None:
+        for comp in self.observed:
+            try:
+                frozen = [t for t in comp.tables if self.registry.is_frozen(make_registry_key(self.name, t))]
+                comp.observe(frozen, self.notifier, self.lag)
+            except Exception as e:  # lỗi bất ngờ ở 1 component không được dừng việc giám sát schema
+                print(f"[{self.name}] component {comp.name} check failed: {e}")
+
+    def _observe_loop(self) -> None:
+        try:
+            while not self._stop.is_set():
+                self._observe_components()
+                self._observe_now.wait(COMPONENT_CHECK_SECONDS)  # hoặc sớm hơn: worker vừa kiểm tra xong
+                self._observe_now.clear()
+        finally:
+            if self.lag is not None:
+                self.lag.close()
 
     def _run(self) -> None:
         print(f"[{self.name}] worker started ({'event_driven' if self.event_driven else 'polling'}, scan every {self.interval}s)")
@@ -126,6 +162,7 @@ class PipelineWorker:
                 if time.monotonic() >= next_scan:
                     self._scan()
                     next_scan = time.monotonic() + self.interval
+                self._observe_now.set()  # bảng vừa freeze -> pause connector ngay, không chờ hết chu kỳ
         finally:
             for engine in (self.source, self.target):
                 if engine is not None:
@@ -155,6 +192,7 @@ class PipelineManager:
         self.global_cfg = cfg
         self.registry = SchemaRegistry(cfg["registry"]["dir"])
         event_logger.persist_to(Path(cfg["registry"]["dir"]) / "_events.jsonl")  # cùng chỗ với lịch sử schema
+        runtime_status.persist_components_to(Path(cfg["registry"]["dir"]) / "_components.json")
         self.notifier = self._make_notifier(cfg)
         self.workers: dict[str, PipelineWorker] = {}
         self.errors: dict[str, str] = {}  # tên file pipeline -> lỗi cấu hình

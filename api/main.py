@@ -1,11 +1,13 @@
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-import os
+import hmac
+import re
 import sys
-import time
 from pathlib import Path
 import yaml
 
@@ -18,7 +20,7 @@ from app.scheduler import (
     DEFAULT_FALLBACK_INTERVAL, ENGINE_REGISTRY, PIPELINE_NAME_RE, check_with_secrets,
     load_config as _load_config_files, load_pipeline_specs, validate_main_config, validate_pipeline_spec,
 )
-from app.secret_store import externalize, load_env, mask, unmask
+from app.secret_store import atomic_write, externalize, load_env, mask, unmask
 from app import runtime_status
 
 app = FastAPI(title="Schema Evolution API")
@@ -59,6 +61,32 @@ def start_engine():
 def load_config(config_path: str = "config/main.yaml") -> dict:
     """Cấu hình engine ĐANG chạy (kể cả khi file vừa bị sửa hỏng), không đọc lại file."""
     return _manager.snapshot() if _manager is not None else _load_config_files(config_path)
+
+REPORT_PATH = re.compile(r"/api/pipelines/[^/]+/components/[^/]+")
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    """
+    Bật khi main.yaml có auth.users (chưa có = mở như trước). Lệnh đọc (GET: UI, Gate API) luôn mở.
+    Lệnh ghi cần "Authorization: Bearer <token>": reporter chỉ gọi được Reporting API, admin gọi được tất cả.
+    """
+    request.state.user = None
+    if request.method in ("GET", "HEAD", "OPTIONS") or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    users = (load_config().get("auth") or {}).get("users") or {}
+    if not users:
+        return await call_next(request)
+    given = request.headers.get("authorization", "").removeprefix("Bearer ").strip().encode()
+    user = next((n for n, u in users.items() if given and hmac.compare_digest(given, u["token"].encode())), None)
+    if user is None:
+        return JSONResponse({"detail": "Missing or invalid API token (Authorization: Bearer <token>)"}, status_code=401)
+    if users[user]["role"] != "admin" and not REPORT_PATH.fullmatch(request.url.path):
+        return JSONResponse({"detail": f"'{user}' has role '{users[user]['role']}': only the Reporting API is allowed"},
+                            status_code=403)
+    request.state.user = user
+    return await call_next(request)
+
 
 def get_registry(config: dict) -> SchemaRegistry:
     return SchemaRegistry(config["registry"]["dir"])
@@ -147,14 +175,29 @@ def report_component(pipeline: str, component: str, payload: dict):
 
 @app.get("/api/pipelines/{pipeline}/components")
 def list_components(pipeline: str):
-    _monitored_pipeline(pipeline)
-    return runtime_status.get_components(pipeline)
+    return runtime_status.get_components(pipeline, _monitored_pipeline(pipeline).get("components"))
 
 
 @app.get("/api/events")
 def get_cdc_events():
     from app.event_log import event_logger
     return event_logger.get_events()
+
+
+# Live Events chỉ là nhật ký: xoá không đổi freeze, baseline hay bảng chờ duyệt. Khi bật auth: cần admin.
+@app.delete("/api/events/{event_id}")
+def delete_cdc_event(event_id: int):
+    from app.event_log import event_logger
+    if not event_logger.delete(event_id):
+        raise HTTPException(status_code=404, detail=f"Event {event_id} not found")
+    return {"status": "success"}
+
+
+@app.delete("/api/events")
+def clear_cdc_events():
+    from app.event_log import event_logger
+    event_logger.clear()
+    return {"status": "success"}
 
 @app.get("/api/topology")
 def get_pipeline_topology():
@@ -242,15 +285,21 @@ def get_pipeline_topology():
             },
             "tables": tables,
             "created_at": min((t["monitored_since"] for t in tables if t["monitored_since"]), default=None),
-            "components": runtime_status.get_components(pair_name),
+            "components": runtime_status.get_components(pair_name, pair.get("components")),
         })
     # File cấu hình lỗi: engine không giám sát nhưng vẫn hiện trên UI kèm lý do.
     for file_name, error in config.get("pipeline_errors", {}).items():
         pipelines.append({"name": Path(file_name).stem, "file": file_name, "config_error": error, "tables": []})
     return pipelines
 
-@app.get("/")
+# Bản đóng gói (Dockerfile): giao diện đã build nằm ở frontend/dist và được phục vụ cùng cổng với API.
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+
+@app.get("/", include_in_schema=False)
 def read_root():
+    if (FRONTEND_DIST / "index.html").is_file():
+        return FileResponse(FRONTEND_DIST / "index.html")
     return {"message": "Schema Evolution API is running! Please access the frontend Web App at http://localhost:5173"}
 
 @app.get("/api/tables")
@@ -353,7 +402,7 @@ def get_table_details(registry_key: str):
     }
 
 @app.post("/api/tables/{registry_key:path}/approve")
-def approve_changes(registry_key: str):
+def approve_changes(registry_key: str, request: Request):
     config = load_config()
     registry = get_registry(config)
     notifier = get_notifier(config)
@@ -397,11 +446,10 @@ def approve_changes(registry_key: str):
         }.get(result["status"], result["status"])
         return {"status": "error", "message": message, "result": _summarize_result(result)}
 
-    notifier.notify_change_reviewed(
-        table_name, approved=True, pair_name=pair_name
-    )
+    by = request.state.user
+    notifier.notify_change_reviewed(table_name, approved=True, pair_name=pair_name, by=by)
     applied = ", ".join(_summarize_result(result)["applied_to_target"]) or "registry only"
-    _log_review(pair_name, table_name, "approved", f"Approved: {applied} applied to target")
+    _log_review(pair_name, table_name, "approved", f"Approved{_by(by)}: {applied} applied to target")
 
     return {"status": "success", "result": _summarize_result(result)}
 
@@ -411,6 +459,10 @@ def _log_review(pair_name: str, table_name: str, status: str, text: str) -> None
     from app.event_log import event_logger
     event_logger.add_event(pipeline_name=pair_name, table_name=table_name,
                            ddl=f"[review] {text}", status=status, severity="review")
+
+
+def _by(user: str | None) -> str:
+    return f" by {user}" if user else ""  # auth chưa bật: không biết ai bấm
 
 
 def _summarize_result(result: dict) -> dict:
@@ -424,7 +476,7 @@ def _summarize_result(result: dict) -> dict:
     }
 
 @app.post("/api/tables/{registry_key:path}/reject")
-def reject_changes(registry_key: str):
+def reject_changes(registry_key: str, request: Request):
     config = load_config()
     registry = get_registry(config)
     notifier = get_notifier(config)
@@ -436,10 +488,9 @@ def reject_changes(registry_key: str):
         rejected = registry.reject_change(registry_key)
     if not rejected:
         return {"status": "error", "message": "No draft to reject."}
-    notifier.notify_change_reviewed(
-        table_name, approved=False, pair_name=pair_name
-    )
-    _log_review(pair_name, table_name, "rejected", "Rejected: draft discarded, source must be rolled back")
+    by = request.state.user
+    notifier.notify_change_reviewed(table_name, approved=False, pair_name=pair_name, by=by)
+    _log_review(pair_name, table_name, "rejected", f"Rejected{_by(by)}: draft discarded, source must be rolled back")
 
     return {"status": "success"}
 
@@ -507,16 +558,7 @@ MAIN_CONFIG = Path("config/main.yaml")
 
 
 def _write_yaml(path: Path, data: dict) -> None:
-    """Ghi nguyên tử (file tạm rồi đổi tên): engine quét mỗi 3s không bao giờ đọc phải file ghi dở."""
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    for _ in range(10):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:  # Windows: engine đang mở file để đọc -> thử lại
-            time.sleep(0.1)
-    os.replace(tmp, path)
+    atomic_write(path, yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
 
 
 def _reject(errors: list[str]):
@@ -593,6 +635,13 @@ def create_pipeline_config(payload: dict):
     specs, _ = load_pipeline_specs(PIPELINES_DIR)
     if target_file.exists() or any(s["name"] == spec["name"] for s in specs):
         raise HTTPException(status_code=409, detail=f"Pipeline '{spec['name']}' already exists")
+    # Mật khẩu gõ trên web thành biến <TÊN>_SOURCE_PASSWORD...: "shop-sales" và "shop_sales" sẽ ghi đè bí mật của nhau.
+    var = lambda n: re.sub(r"[^A-Z0-9_]", "_", n.upper())
+    clash = next((n for n in {s["name"] for s in specs} | {f.stem for f in PIPELINES_DIR.glob("*.yaml")}
+                  if var(n) == var(spec["name"])), None)
+    if clash:
+        raise HTTPException(status_code=409, detail=f"Pipeline '{spec['name']}' would share secret variables "
+                                                    f"({var(spec['name'])}_*) with '{clash}' — choose another name")
     PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
     _write_yaml(target_file, _externalize(spec, PIPELINES_DIR.parent, spec["name"]))
     return {"status": "success", "filename": target_file.name,
@@ -621,5 +670,10 @@ def delete_pipeline_config(name: str):
         raise HTTPException(status_code=404, detail=f"{name}.yaml not found")
     target_file.unlink()
     return {"status": "success", "message": f"Deleted {name}.yaml — the engine stops monitoring within ~3s"}
+
+
+# Phải mount SAU mọi route /api: mount ở "/" bắt mọi đường dẫn còn lại (file JS/CSS của giao diện).
+if FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST), name="frontend")
 
 

@@ -68,7 +68,7 @@ export default function EditSchema({ tables, onDeploySuccess }) {
         addToast(t('toast_schema_drafted'), "success");
         if (onDeploySuccess) onDeploySuccess();
       } else {
-        addToast(`${t('toast_action_failed')}: ${data.message || ''}`, "error");
+        addToast(`${t('toast_action_failed')}: ${data.message || (typeof data.detail === 'string' ? data.detail : '')}`, "error");
       }
     } catch (e) {
       addToast(`${t('toast_network_error')}: ${e.message}`, "error");

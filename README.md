@@ -193,7 +193,20 @@ Register CDC source connectors for Postgres, MySQL, and MongoDB:
 .\debezium\register_connectors.ps1
 ```
 
-### 3. Start FastAPI Backend Server
+### 3. Start the Schema Evolution system: one command (Docker)
+Backend (engine + API) and the web UI are packaged in one image ([`Dockerfile`](Dockerfile)), served on one port:
+```bash
+docker compose up -d --build engine      # then open http://localhost:8000
+docker compose stop engine               # stop it (config and state stay on the host)
+```
+- `config/` (main.yaml, pipelines, `secrets.env`) and `data/` (registry, history) are mounted from the host. Edits made in the web UI or in the files are picked up within ~3s, exactly like the non-Docker setup.
+- Configs written for the host use `localhost:<port>` (Postgres 5431, Kafka 19092, Kafka Connect 8083...). Inside the container, each port listed in `FORWARD_PORTS` (Dockerfile) is forwarded to the host, so the same config works in both modes. Add a port there if a pipeline uses another `localhost` port. Databases on other hosts need nothing.
+- `docker compose up -d` alone still starts only the infrastructure (the `engine` service sits behind a profile).
+- Do not run it next to `uvicorn` on the host: both use port 8000.
+
+Or run the pieces yourself (steps 3b and 4), e.g. for development with hot reload:
+
+### 3b. Start FastAPI Backend Server
 ```bash
 # Activate virtual environment
 .\venv\Scripts\Activate.ps1

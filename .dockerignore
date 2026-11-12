@@ -1,0 +1,11 @@
+# Chỉ cho vào image đúng phần cần chạy (danh sách cho phép): không bao giờ lọt config/secrets.env,
+# venv, data/ hay node_modules. config/ và data/ được gắn lúc chạy (docker-compose.yml, service engine).
+*
+!requirements.txt
+!src/
+!app/
+!api/
+!frontend/
+frontend/node_modules
+frontend/dist
+**/__pycache__

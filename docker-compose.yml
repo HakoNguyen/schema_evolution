@@ -97,6 +97,23 @@ services:
     networks:
       - cdc_network
 
+  # 5. Schema Evolution: engine + API + giao diện web, một container (xem Dockerfile).
+  #    Bật:  docker compose up -d --build engine     -> http://localhost:8000
+  #    Tắt:  docker compose stop engine
+  #    Không đặt restart: container tự bật lại sẽ chiếm cổng 8000 của backend chạy trên host.
+  engine:
+    profiles: ["engine"]   # "docker compose up -d" (chỉ hạ tầng) không bật engine; gọi đích danh thì bật
+    build: .
+    image: schema-evolution:latest
+    container_name: schema_evolution
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/app/config   # main.yaml, pipelines/*.yaml, secrets.env: sửa trên web hay sửa file đều nạp lại
+      - ./data:/app/data       # registry.dir mặc định ./data/registry: baseline, lịch sử, sự kiện
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # đích của FORWARD_PORTS (cần trên Linux, Docker Desktop có sẵn)
+
 volumes:
   postgres_data:
   mysql_data:

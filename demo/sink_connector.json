@@ -1,0 +1,13 @@
+{
+  "connector.class": "io.debezium.connector.jdbc.JdbcSinkConnector",
+  "tasks.max": "1",
+  "topics": "market.public.tickers",
+  "connection.url": "jdbc:postgresql://postgres_db:5432/exchange_replica",
+  "connection.username": "admin",
+  "connection.password": "password123",
+  "table.name.format": "tickers",
+  "insert.mode": "upsert",
+  "primary.key.mode": "record_key",
+  "schema.evolution": "none",
+  "errors.tolerance": "none"
+}

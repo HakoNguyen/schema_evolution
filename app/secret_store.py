@@ -12,6 +12,7 @@ Giá trị thật lấy từ (ưu tiên giảm dần): biến môi trường th�
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
 SECRETS_FILE = "secrets.env"
@@ -122,9 +123,28 @@ def _save(config_dir: Path, values: dict[str, str]) -> None:
             if key in pending:
                 lines[i] = f'{key}="{pending.pop(key)}"'
         lines += [f'{k}="{v}"' for k, v in pending.items()]
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write(path, "\n".join(lines) + "\n")
+
+
+def atomic_write(path: Path, text: str) -> None:
+    """
+    Ghi file tạm rồi đổi tên: engine quét mỗi 3s không bao giờ đọc phải file ghi dở.
+    Windows: file đang được mở để đọc -> os.replace báo PermissionError -> thử lại.
+    Thất bại hẳn thì vẫn xoá file tạm (có thể chứa mật khẩu thật).
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        for attempt in range(10):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.1)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def unmask(new, old):

@@ -6,6 +6,9 @@ Dựng (hoặc dựng lại) toàn bộ luồng demo: market_trades + market_tic
 
 --reset xóa: connector + replication slot, DB exchange, DB shop (Mongo), DB analytics, topic CDC,
 consumer group của loader và registry của pipeline. Nên tắt ingestor/loader/backend trước.
+
+Mức 3: thêm sink Kafka Connect có sẵn (Debezium JDBC sink) chép tickers sang DB exchange_replica.
+Pipeline market_tickers_replica giữ schema bảng replica và pause/resume sink theo freeze.
 """
 import argparse
 import json
@@ -62,23 +65,6 @@ ORDER BY _id
 """
 
 
-def _put_connector(name: str, config_file: Path) -> None:
-    cfg = json.loads(config_file.read_text(encoding="utf-8"))
-    r = requests.put(f"{c.CONNECT_URL}/connectors/{name}/config", json=cfg, timeout=30)
-    r.raise_for_status()
-    for _ in range(30):
-        st = requests.get(f"{c.CONNECT_URL}/connectors/{name}/status", timeout=10)
-        if st.ok:
-            tasks = st.json().get("tasks", [])
-            if tasks and tasks[0]["state"] == "RUNNING":
-                print(f"  connector {name} RUNNING")
-                return
-            if tasks and tasks[0]["state"] == "FAILED":
-                raise SystemExit(f"connector {name} FAILED: {tasks[0].get('trace', '')[:500]}")
-        time.sleep(1)
-    raise SystemExit(f"connector {name} chưa RUNNING sau 30s")
-
-
 def _mongo_primary(client) -> None:
     """Container mongo_db chạy --replSet rs0 (Debezium cần change stream): khởi tạo nếu chưa, chờ thành primary."""
     try:
@@ -95,9 +81,9 @@ def _mongo_primary(client) -> None:
 
 
 def reset() -> None:
-    print("[reset] connector")
-    requests.delete(f"{c.CONNECT_URL}/connectors/{c.CONNECTOR_NAME}", timeout=10)
-    requests.delete(f"{c.CONNECT_URL}/connectors/{c.ORDERS_CONNECTOR}", timeout=10)
+    print("[reset] connectors")
+    for name in (c.SINK_CONNECTOR_NAME, c.CONNECTOR_NAME, c.ORDERS_CONNECTOR):
+        requests.delete(f"{c.CONNECT_URL}/connectors/{name}", timeout=10)
 
     print(f"[reset] mongo: DB {c.MONGO_DB}")
     pymongo.MongoClient(**c.MONGO).drop_database(c.MONGO_DB)
@@ -115,6 +101,7 @@ def reset() -> None:
                 break
             time.sleep(1)
         cur.execute("DROP DATABASE IF EXISTS exchange WITH (FORCE)")
+        cur.execute(f"DROP DATABASE IF EXISTS {c.REPLICA_DB} WITH (FORCE)")
 
     print(f"[reset] clickhouse: DB {c.CH_DATABASE}, {c.CH_NAIVE_DATABASE}")
     ch = clickhouse_connect.get_client(**c.CH)
@@ -130,13 +117,13 @@ def reset() -> None:
     # kafka-python 3.x: delete_groups (2.x là delete_consumer_groups). Nhóm chưa tồn tại -> bỏ qua.
     existing = {g["group_id"] for g in admin.list_groups()}
     groups = [g for g in (c.LOADER_GROUP, c.LOADER_NAIVE_GROUP, f"{c.LOADER_GROUP}-{c.TICKERS_TABLE}",
-                          f"{c.LOADER_GROUP}-{c.ORDERS_TABLE}") if g in existing]
+                          f"{c.LOADER_GROUP}-{c.ORDERS_TABLE}", c.SINK_GROUP) if g in existing]
     if groups:
         admin.delete_groups(groups)
     admin.close()
 
     print("[reset] registry")
-    for pipeline in (c.PIPELINE_NAME, c.TICKERS_PIPELINE, c.ORDERS_PIPELINE):
+    for pipeline in (c.PIPELINE_NAME, c.TICKERS_PIPELINE, c.REPLICA_PIPELINE, c.ORDERS_PIPELINE):
         shutil.rmtree(ROOT / "data" / "registry" / pipeline, ignore_errors=True)
 
 
@@ -157,7 +144,16 @@ def setup() -> None:
             ch.command(stmt)
 
     print("[setup] debezium connector")
-    _put_connector(c.CONNECTOR_NAME, HERE / "connector.json")
+    _register(c.CONNECTOR_NAME, "connector.json")
+
+    print(f"[setup] mức 3: DB {c.REPLICA_DB} + sink Kafka Connect {c.SINK_CONNECTOR_NAME}")
+    with _pg_admin() as cur:
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (c.REPLICA_DB,))
+        if cur.fetchone() is None:
+            cur.execute(f"CREATE DATABASE {c.REPLICA_DB}")
+    with psycopg2.connect(**{**c.PG, "dbname": c.REPLICA_DB}) as conn, conn.cursor() as cur:
+        cur.execute(_replica_ddl(c.TICKERS_TABLE))
+    _register(c.SINK_CONNECTOR_NAME, "sink_connector.json")
 
     print(f"[setup] mongo: replica set + {c.MONGO_DB}.{c.ORDERS_TABLE} (đơn hàng v1)")
     client = pymongo.MongoClient(**c.MONGO)
@@ -169,8 +165,41 @@ def setup() -> None:
         db[c.ORDERS_TABLE].insert_many([make_order(DEFAULT_RELEASE) for _ in range(20)])
     client.close()
     clickhouse_connect.get_client(**c.CH).command(ORDERS_DDL)
-    _put_connector(c.ORDERS_CONNECTOR, HERE / "mongo_connector.json")
+    _register(c.ORDERS_CONNECTOR, "mongo_connector.json")
     print("[setup] xong")
+
+
+def _replica_ddl(table: str) -> str:
+    """CREATE TABLE replica theo cấu trúc HIỆN TẠI của bảng nguồn (không phải v1 trong source.sql):
+    nguồn đã qua vài kịch bản thì replica vẫn khớp baseline engine đọc từ nguồn."""
+    with psycopg2.connect(**c.PG) as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT a.attname, format_type(a.atttypid, a.atttypmod), a.attnotnull, array_position(i.indkey::int2[], a.attnum)
+            FROM pg_attribute a LEFT JOIN pg_index i ON i.indrelid = a.attrelid AND i.indisprimary
+            WHERE a.attrelid = %s::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum""",
+                    (f"public.{table}",))
+        cols = cur.fetchall()
+    defs = [f'"{n}" {t}{" NOT NULL" if notnull else ""}' for n, t, notnull, _ in cols]
+    # indkey là int2vector đánh số từ 0: vị trí 0 hợp lệ, chỉ None mới là "không thuộc khoá chính".
+    pk = ", ".join(f'"{n}"' for n, _, _, pos in sorted((col for col in cols if col[3] is not None), key=lambda col: col[3]))
+    return f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(defs)}, PRIMARY KEY ({pk}))"
+
+
+def _register(name: str, config_file: str) -> None:
+    cfg = json.loads((HERE / config_file).read_text(encoding="utf-8"))
+    r = requests.put(f"{c.CONNECT_URL}/connectors/{name}/config", json=cfg, timeout=30)
+    r.raise_for_status()
+    for _ in range(30):
+        st = requests.get(f"{c.CONNECT_URL}/connectors/{name}/status", timeout=10)
+        if st.ok:
+            tasks = st.json().get("tasks", [])
+            if tasks and tasks[0]["state"] == "RUNNING":
+                print(f"  {name} RUNNING")
+                return
+            if tasks and tasks[0]["state"] == "FAILED":
+                raise SystemExit(f"{name} FAILED: {tasks[0].get('trace', '')[:500]}")
+        time.sleep(1)
+    raise SystemExit(f"{name} chưa RUNNING sau 30s")
 
 
 if __name__ == "__main__":

@@ -70,6 +70,9 @@ def test_source_quirks_found_on_live_dbs():
     assert norm("int", "int unsigned") == "bigint"          # 4294967295 không còn thành -1
     assert norm("bigint", "bigint unsigned") == "numeric"
     assert norm("tinyint", "tinyint(1)") == "boolean" and norm("mediumint", "mediumint") == "int"
+    assert norm("double", "double unsigned") == "double"    # không bị ép numeric(20,0) (cắt 19.99 -> 20)
+    full = MySQLEngine({})._render_full_column_def
+    assert full(ColumnSchema("t", "timestamp", False, default="now()")).endswith("DEFAULT CURRENT_TIMESTAMP(6)")  # MySQL lỗi 1067 nếu thiếu (6)
     assert render_portable_default("CURRENT_TIMESTAMP(6)", now_sql="now()") == "now()"
     assert _merge_types({"int", "bigint"}) == "bigint" and _merge_types({"int", "double"}) == "double"
     assert _merge_types({"int", "text"}) == "json"

@@ -8,6 +8,7 @@ from src.schema_evolution.engines.base import (
     SchemaChange, 
     ChangeType,
     render_portable_default,
+    sandbox_table,
 )
 
 import clickhouse_connect
@@ -59,6 +60,15 @@ FIXED_STRING_RE = re.compile(r"^FixedString\((\d+)\)$")
 def _q(identifier: str) -> str:
     """Tên cột trong backtick: cột như unit-price/order không làm hỏng câu DDL."""
     return "`" + identifier.replace("`", "``") + "`"
+
+
+def _nullable(ch_type: str) -> str:
+    """ClickHouse cấm Nullable(LowCardinality(T)) (lỗi 43); dạng đúng là LowCardinality(Nullable(T))."""
+    if ch_type.startswith(("Nullable(", "LowCardinality(Nullable(")):
+        return ch_type
+    if ch_type.startswith("LowCardinality("):
+        return f"LowCardinality(Nullable({ch_type[len('LowCardinality('):-1]}))"
+    return f"Nullable({ch_type})"
 
 
 class ClickHouseEngine(BaseEngine): 
@@ -193,7 +203,7 @@ class ClickHouseEngine(BaseEngine):
                 if current is None:
                     type_sql = self._render_type(change.new_value)  # col.nullable đã là True
                 else:
-                    type_sql = current if current.startswith("Nullable(") else f"Nullable({current})"
+                    type_sql = _nullable(current)
                 statements.append(
                     f"ALTER TABLE {change.table_name} "
                     f"MODIFY COLUMN {_q(change.column_name)} {type_sql}"
@@ -272,7 +282,7 @@ class ClickHouseEngine(BaseEngine):
         try:
             # 1. Create sandbox tables
             for table_name in tables:
-                sandbox_name = f"__sandbox_{table_name}"
+                sandbox_name = sandbox_table(table_name)
                 self.connection.command(f"DROP TABLE IF EXISTS {sandbox_name}")
                 self.connection.command(f"CREATE TABLE {sandbox_name} AS {table_name}")
                 created_sandboxes.append(sandbox_name)
@@ -284,7 +294,7 @@ class ClickHouseEngine(BaseEngine):
             # 2. Apply DDL to sandbox tables
             statements = self.generate_ddl(changes)
             for stmt, change in zip(statements, changes):
-                sandbox_name = f"__sandbox_{change.table_name}"
+                sandbox_name = sandbox_table(change.table_name)
                 sandbox_stmt = stmt.replace(
                     f"ALTER TABLE {change.table_name} ",
                     f"ALTER TABLE {sandbox_name} ",

@@ -158,7 +158,21 @@ def test_main_yaml_reload():
     print("[PASS] test_main_yaml_reload")
 
 
+def test_target_table_names_are_plain_identifiers():
+    from app.scheduler import validate_pipeline_spec
+    base = {"name": "p", "source": {"type": "postgres", "config": {"host": "h", "dbname": "d"}}}
+    target = {"target": {"type": "clickhouse", "config": {"host": "h", "port": 8123, "database": "dw"}}}
+    errs = lambda tables, **extra: [e for e in validate_pipeline_spec({**base, **extra, "tables": tables}) if e.startswith("tables")]
+    assert errs(["my-table"], **target)                                       # ALTER TABLE my-table: lỗi cú pháp
+    assert errs([{"source": "my-table", "target": "my_table"}], **target) == []
+    assert errs(["my-table"]) == []                                           # chỉ giám sát: không có DDL
+    assert errs(["orders", "sales.orders"]) == []                             # không có đích thì không trùng đích
+    assert errs(["orders", "sales.orders"], **target)
+    print("[PASS] test_target_table_names_are_plain_identifiers")
+
+
 if __name__ == "__main__":
+    test_target_table_names_are_plain_identifiers()
     test_load_specs_isolates_bad_files()
     test_connection_fields_validated()
     test_hot_reload_lifecycle()

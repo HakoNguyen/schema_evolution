@@ -77,6 +77,33 @@ def test_pipeline_config_api():
     print("[PASS] test_pipeline_config_api")
 
 
+def test_secret_name_clash_and_temp_cleanup():
+    cwd = os.getcwd()
+    with tempfile.TemporaryDirectory() as d:
+        os.chdir(d)
+        try:
+            Path("config/pipelines").mkdir(parents=True)
+            api.create_pipeline_config({**SPEC, "name": "shop_sales"})
+            # cùng biến SHOP_SALES_SOURCE_PASSWORD -> sẽ ghi đè mật khẩu của shop_sales
+            assert "secret variables" in _expect(409, api.create_pipeline_config, {**SPEC, "name": "shop-sales"})
+
+            from app.secret_store import atomic_write
+            original = os.replace
+            os.replace = lambda *a: (_ for _ in ()).throw(PermissionError("file in use"))
+            try:
+                atomic_write(Path("config/secrets.env"), 'X="real-password"')
+                raise AssertionError("expected PermissionError")
+            except PermissionError:
+                pass
+            finally:
+                os.replace = original
+            assert not list(Path("config").rglob("*.tmp")), "file tạm chứa mật khẩu phải bị xoá"
+        finally:
+            os.chdir(cwd)
+    print("[PASS] test_secret_name_clash_and_temp_cleanup")
+
+
 if __name__ == "__main__":
     test_pipeline_config_api()
+    test_secret_name_clash_and_temp_cleanup()
     print("\nALL CONFIG API TESTS PASSED!")

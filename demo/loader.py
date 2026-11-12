@@ -50,6 +50,8 @@ class Reporter:
         self.metrics = {"target_table": f"{database}.{table}"}
         self.sent_at = 0.0
         self.session = requests.Session()
+        if c.ENGINE_TOKEN:
+            self.session.headers["Authorization"] = f"Bearer {c.ENGINE_TOKEN}"
 
     def update(self, state: str, message: str = "", **metrics) -> None:
         changed = (state, message) != (self.state, self.message)

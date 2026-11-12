@@ -6,6 +6,7 @@ from src.schema_evolution.engines.base import (
     SchemaChange,
     ChangeType,
     render_portable_default,
+    sandbox_table,
 )
 
 import mysql.connector
@@ -186,9 +187,10 @@ class MySQLEngine(BaseEngine):
     def _normalize_type(self, data_type: str, column_type: str) -> str:
         if data_type == "tinyint" and column_type == "tinyint(1)":
             return "boolean"
-        if "unsigned" in (column_type or "").lower():
+        if "unsigned" in (column_type or "").lower() and data_type in ("tinyint", "smallint", "mediumint", "int", "bigint"):
             # Đích không có kiểu không dấu chung -> lên kiểu có dấu rộng hơn 1 bậc, nếu không
             # INT UNSIGNED 4294967295 thành -1 ở đích. BIGINT UNSIGNED -> numeric(20,0).
+            # FLOAT/DOUBLE/DECIMAL UNSIGNED giữ kiểu gốc (ép numeric(20,0) sẽ cắt phần thập phân).
             return {"tinyint": "smallint", "smallint": "int", "mediumint": "int", "int": "bigint"}.get(data_type, "numeric")
         if data_type == "mediumint":
             return "int"
@@ -214,7 +216,9 @@ class MySQLEngine(BaseEngine):
     def _render_full_column_def(self, column: ColumnSchema) -> str:
         type_sql = self._render_type(column)
         null_sql = "NULL" if column.nullable else "NOT NULL"
-        default = render_portable_default(column.default)
+        # DATETIME(6): MySQL bắt default now() cùng độ chính xác, CURRENT_TIMESTAMP trơn báo lỗi 1067.
+        default = render_portable_default(column.default, "CURRENT_TIMESTAMP(6)"
+                                          if column.data_type in ("timestamp", "timestamptz") else "CURRENT_TIMESTAMP")
         default_sql = f" DEFAULT {default}" if default is not None else ""
         return f"{column.name} {type_sql} {null_sql}{default_sql}"
 
@@ -307,7 +311,7 @@ class MySQLEngine(BaseEngine):
             cur = self.connection.cursor()
             # 1. Create sandbox tables
             for table_name in tables:
-                sandbox_name = f"__sandbox_{table_name}"
+                sandbox_name = sandbox_table(table_name)
                 cur.execute(f"DROP TABLE IF EXISTS {sandbox_name}")
                 cur.execute(f"CREATE TABLE {sandbox_name} LIKE {table_name}")
                 created_sandboxes.append(sandbox_name)
@@ -320,7 +324,7 @@ class MySQLEngine(BaseEngine):
             # 2. Apply DDL to sandbox tables
             statements = self.generate_ddl(changes)
             for stmt, change in zip(statements, changes):
-                sandbox_name = f"__sandbox_{change.table_name}"
+                sandbox_name = sandbox_table(change.table_name)
                 sandbox_stmt = stmt.replace(
                     f"ALTER TABLE {change.table_name} ",
                     f"ALTER TABLE {sandbox_name} ",

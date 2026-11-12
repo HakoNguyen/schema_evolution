@@ -292,6 +292,31 @@ Engine không biết gì về "demo trades": mọi pipeline là một file trong
 | `python -m demo.scenario tickers_drop` (xóa cột `low_price`) | `market_tickers/tickers` freeze sau **2,0 giây**, loader tickers PAUSE. `market_trades/trades` vẫn `open`, loader trades vẫn chạy khoảng 300 dòng/giây, đối chiếu vẫn **KHỚP, mất 0 dòng** |
 | `python -m demo.scenario tickers_restore` (thêm lại cột) | Nguồn khớp baseline, engine tự gỡ freeze sau **2,0 giây**, loader tickers RESUME và xử lý hết phần tồn trong Kafka |
 
+### Pipeline 3: sink có sẵn, engine tự điều khiển (mức 3)
+
+`market_tickers_replica` dùng một sink **không sửa được code**: Debezium JDBC sink trên Kafka Connect (`market-tickers-replica`) chép `tickers` sang DB Postgres `exchange_replica`. `demo.setup` tạo sink này và bảng replica (chép đúng cấu trúc hiện tại của bảng nguồn).
+
+```
+topic market.public.tickers ──► Kafka Connect: market-tickers-replica ──► exchange_replica.tickers
+                                       ▲ pause / resume
+engine (pipeline market_tickers_replica, components[].kafka_connect)
+```
+
+- Sink chỉ ghi dữ liệu (`schema.evolution: none`). Schema của bảng replica do engine quản lý như mọi đích khác: thay đổi không breaking thì engine tự `ALTER`, thay đổi breaking thì chờ duyệt.
+- Bảng freeze thì engine pause connector, gỡ freeze thì resume và restart task FAILED. Không cần sửa code sink.
+- Trên Pipelines Overview, component `replica-sink` hiện trạng thái connector và consumer lag mà engine tự đo.
+
+Đã kiểm chứng (11/11/2026) trên Kafka Connect 3.8 với Debezium JDBC sink thật:
+
+| Bước | Kết quả |
+|---|---|
+| `tickers_drop` | Freeze, connector **PAUSED**, replica không đổi trong lúc chờ duyệt dù nguồn vẫn ghi |
+| `tickers_restore` | Engine tự gỡ freeze, connector **RUNNING**, replica bắt kịp |
+| `drop` rồi **Approve** | Sandbox Postgres pass, engine `DROP COLUMN` trên replica, connector chạy lại |
+| Cuối cùng | Replica **giống nguồn từng giá trị** |
+
+Vì sao là `tickers` chứ không phải `trades`: kịch bản `rename` của `trades` làm sink cố định schema chết khi đọc lại message cũ. Xem [CONFIGURATION_GUIDE mục 5](../CONFIGURATION_GUIDE.md#5-sink-có-sẵn-không-sửa-được-code-khai-báo-components).
+
 ---
 
 ## Xử lý sự cố
