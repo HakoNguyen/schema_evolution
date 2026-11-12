@@ -1,6 +1,8 @@
 # Schema Evolution Engine
 
-> Lớp quản lý schema đặt cạnh pipeline CDC có sẵn: tự đồng bộ thay đổi an toàn, chặn thay đổi nguy hiểm, và **không làm mất dòng dữ liệu nào**.
+**English** | [Tiếng Việt](README.vi.md)
+
+> A schema governance layer that sits next to an existing CDC pipeline: it applies safe changes automatically, holds dangerous ones for review, and **loses no rows**.
 
 ![Schema Evolution Architecture](docs/images/architecture_banner.png)
 
@@ -11,112 +13,112 @@
 [![Redpanda](https://img.shields.io/badge/Kafka-Redpanda-red.svg)](https://redpanda.com/)
 [![ClickHouse](https://img.shields.io/badge/Warehouse-ClickHouse-yellow.svg)](https://clickhouse.com/)
 
-## Mục lục
+## Contents
 
-1. [Dự án giải quyết vấn đề gì](#1-dự-án-giải-quyết-vấn-đề-gì)
-2. [Kiến trúc](#2-kiến-trúc)
-3. [Tính năng](#3-tính-năng)
-4. [Cơ sở dữ liệu được hỗ trợ](#4-cơ-sở-dữ-liệu-được-hỗ-trợ)
-5. [Cài đặt và chạy demo](#5-cài-đặt-và-chạy-demo)
-6. [Các kịch bản demo](#6-các-kịch-bản-demo)
-7. [Khai báo pipeline](#7-khai-báo-pipeline)
-8. [Tích hợp với data plane](#8-tích-hợp-với-data-plane)
-9. [Kết quả đo](#9-kết-quả-đo)
-10. [Kiểm thử](#10-kiểm-thử)
-11. [Cấu trúc thư mục](#11-cấu-trúc-thư-mục)
-12. [Hạn chế đã biết](#12-hạn-chế-đã-biết)
+1. [The problem](#1-the-problem)
+2. [Architecture](#2-architecture)
+3. [Features](#3-features)
+4. [Supported databases](#4-supported-databases)
+5. [Setup and running the demo](#5-setup-and-running-the-demo)
+6. [Demo scenarios](#6-demo-scenarios)
+7. [Declaring a pipeline](#7-declaring-a-pipeline)
+8. [Integrating your data plane](#8-integrating-your-data-plane)
+9. [Measured results](#9-measured-results)
+10. [Tests](#10-tests)
+11. [Repository layout](#11-repository-layout)
+12. [Known limitations](#12-known-limitations)
 
 ---
 
-## 1. Dự án giải quyết vấn đề gì
+## 1. The problem
 
-Trong một pipeline CDC (Postgres → Debezium → Kafka → loader → kho dữ liệu), dev ở phía nguồn có thể đổi schema bất cứ lúc nào. Khi đó, pipeline thông thường gặp một trong hai chuyện:
+In a CDC pipeline (Postgres → Debezium → Kafka → loader → warehouse), developers can change the source schema at any time. A typical pipeline then does one of two things:
 
-- **Chết ngay**: sink gặp cột lạ, bị kho dữ liệu từ chối (`Unrecognized column ...`), rồi dừng hẳn. Từ đó dữ liệu không vào kho nữa cho tới khi có người tự tay `ALTER TABLE`.
-- **Hỏng âm thầm**: đổi tên cột làm vỡ dashboard, thu hẹp kiểu làm cắt cụt dữ liệu, mà không ai được báo.
+- **Breaks immediately**: the sink meets an unknown column, the warehouse rejects it (`Unrecognized column ...`), and the sink stops. No data reaches the warehouse until someone runs `ALTER TABLE` by hand.
+- **Breaks silently**: a renamed column breaks dashboards, or a narrowed type truncates data, and nobody is told.
 
-Schema Evolution Engine theo dõi schema nguồn, so với một **baseline** đã lưu, rồi quyết định:
+Schema Evolution Engine watches the source schema, compares it with a stored **baseline**, and decides:
 
-| Loại thay đổi | Ví dụ | Engine làm gì |
+| Change | Example | What the engine does |
 |---|---|---|
-| **Không breaking** | Thêm cột, nới rộng kiểu (`NUMERIC(18,8)` → `NUMERIC(24,8)`) | Tự `ALTER` bảng đích trong khoảng 1 giây. Luồng dữ liệu không dừng. |
-| **Breaking** | Đổi tên cột, xoá cột, thu hẹp kiểu, đổi kiểu không tương thích | **Freeze** đúng bảng đó, giữ dữ liệu chờ trong Kafka, gửi cảnh báo Telegram, chờ người duyệt (có chạy thử trên bản sao trước). |
-| **Nguồn tự quay về baseline** | Dev hoàn tác thay đổi nguy hiểm | Tự gỡ freeze, luồng dữ liệu chạy tiếp. |
+| **Non-breaking** | Add a column, widen a type (`NUMERIC(18,8)` → `NUMERIC(24,8)`) | Runs `ALTER` on the target within about a second. Data keeps flowing. |
+| **Breaking** | Rename, drop, narrow, incompatible type change | **Freezes** that table only, keeps the data waiting in Kafka, sends a Telegram alert, and waits for a human (who can dry-run the change on a copy first). |
+| **Source reverts to the baseline** | The developer rolls the change back | Unfreezes automatically. Data flows again. |
 
-Ba nguyên tắc thiết kế:
+Three design principles:
 
-1. **Engine không chép dữ liệu.** Nó chỉ quản lý schema (control plane). Dữ liệu vẫn đi qua luồng có sẵn của bạn (data plane).
-2. **Hai bên nói chuyện qua API.** Loader hỏi **Gate API** "bảng đang open hay frozen", và báo trạng thái qua **Reporting API**. Với sink không sửa được code (Kafka Connect), engine tự pause và resume connector.
-3. **Freeze không làm mất dữ liệu.** Khi bảng bị freeze, loader dừng ghi và không commit offset, nên dữ liệu nằm chờ trong Kafka. Khi bảng được mở lại, loader ghi tiếp từ đúng chỗ đã dừng.
+1. **The engine never copies data.** It governs the schema only (control plane). Data keeps flowing through your own pipeline (data plane).
+2. **The two sides talk over APIs.** A loader asks the **Gate API** whether a table is open or frozen, and reports its state through the **Reporting API**. For sinks whose code you cannot change (Kafka Connect), the engine pauses and resumes the connector itself.
+3. **A freeze loses no data.** While a table is frozen, the loader stops writing and does not commit offsets, so the data waits in Kafka. Once the table opens again, the loader continues exactly where it stopped.
 
 ---
 
-## 2. Kiến trúc
+## 2. Architecture
 
 ```
-                    DATA PLANE (luồng dữ liệu có sẵn của bạn)
- Postgres / MySQL / MongoDB ─► Debezium ─► Kafka (Redpanda) ─┬─► loader của bạn ─────► ClickHouse / MySQL / Postgres
-                                                             └─► Kafka Connect sink ─► (bảng đích)
+                    DATA PLANE (your existing pipeline)
+ Postgres / MySQL / MongoDB ─► Debezium ─► Kafka (Redpanda) ─┬─► your loader ─────────► ClickHouse / MySQL / Postgres
+                                                             └─► Kafka Connect sink ─► (target table)
                                    │                               ▲          ▲
-             message CDC mang theo │ cấu trúc bảng                 │ Gate API │ pause / resume
+          CDC messages carry the   │ table structure               │ Gate API │ pause / resume
                                    ▼                               │          │
  ┌─────────────────────────── CONTROL PLANE: Schema Evolution Engine ──────────────────────────┐
- │ Kafka consumer ─► worker của từng pipeline ─► đọc schema nguồn ─► so với baseline (registry)│
- │   • không breaking → ALTER đích        • breaking → freeze, lưu bản nháp, báo Telegram      │
- │ FastAPI: Gate API · Reporting API · duyệt / từ chối · sandbox · cấu hình  ─►  Web UI (React)│
+ │ Kafka consumer ─► per-pipeline worker ─► read source schema ─► diff against baseline        │
+ │   • non-breaking → ALTER the target      • breaking → freeze, store draft, Telegram alert    │
+ │ FastAPI: Gate API · Reporting API · approve / reject · sandbox · config  ─►  Web UI (React) │
  └─────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Phát hiện theo sự kiện.** Engine đọc message Debezium và chỉ đọc lại schema nguồn khi *cấu trúc* message đổi (fingerprint khác). Ngoài ra còn có một lần quét định kỳ để dự phòng, phòng khi bỏ lỡ sự kiện.
-- **Registry** (`data/registry/`) lưu baseline, lịch sử phiên bản schema, bản nháp chờ duyệt và trạng thái freeze của từng bảng.
-- **Mỗi pipeline có worker, registry và trạng thái freeze riêng**, nên pipeline này lỗi không kéo pipeline kia theo, kể cả khi chúng dùng chung một topic Kafka.
+- **Event-driven detection.** The engine reads Debezium messages and re-reads the source schema only when the *structure* of the messages changes (a different fingerprint). A periodic scan runs as a fallback, in case an event is missed.
+- **The registry** (`data/registry/`) stores each table's baseline, schema version history, pending drafts and freeze state.
+- **Each pipeline has its own worker, registry entries and freeze state**, so a problem in one pipeline never stops another, even when they share a Kafka topic.
 
 ---
 
-## 3. Tính năng
+## 3. Features
 
 **Engine**
-- Phân loại tự động: thêm cột, nới kiểu, `NOT NULL → NULL` là không breaking; đổi tên (tự suy luận cặp cột cũ/mới), xoá cột, thu hẹp kiểu, đổi kiểu không tương thích là breaking.
-- Đồng bộ đích **không mất mát**: `NUMERIC` → `Decimal` (không dùng `Float64` vốn làm tròn tiền), `TIMESTAMP` → `DateTime64(6)`, `DATE` → `Date32`.
-- **Sandbox trước khi duyệt**: Postgres chạy DDL trong transaction rồi `ROLLBACK`; MySQL và ClickHouse clone bảng, chép mẫu dữ liệu thật rồi chạy DDL trên bản sao.
-- **Duyệt và từ chối** trên Web UI hoặc CLI (`python -m app.unfreeze_cli list | view | approve | reject <pipeline/bảng>`). Lịch sử ghi lại ai đã duyệt.
-- **Đổi tên an toàn cho message cũ**: khi duyệt `RENAME`, engine lưu ánh xạ `cũ → mới` trước khi mở bảng. Loader đọc ánh xạ qua Gate API để ghi message cũ vào cột mới.
-- **Nguồn MongoDB (không có schema)**: engine suy schema từ 10.000 document mới nhất. Field vắng mặt không bị coi là đã xoá, nên không sinh freeze giả.
-- **Nhiều pipeline song song**, cách ly hoàn toàn với nhau.
+- Automatic classification: add column, widen type and `NOT NULL → NULL` are non-breaking; rename (inferred from a dropped/added column pair), drop column, narrow type and incompatible type changes are breaking.
+- **Lossless** target types: `NUMERIC` → `Decimal` (never `Float64`, which rounds money), `TIMESTAMP` → `DateTime64(6)`, `DATE` → `Date32`.
+- **Sandbox before approval**: Postgres runs the DDL in a transaction and rolls it back; MySQL and ClickHouse clone the table, copy a sample of real rows and run the DDL on the copy.
+- **Approve or reject** in the web UI or the CLI (`python -m app.unfreeze_cli list | view | approve | reject <pipeline/table>`). The history records who approved.
+- **Safe renames for old messages**: when a `RENAME` is approved, the engine stores an `old → new` mapping before opening the table. Loaders read it from the Gate API and write old messages into the new column.
+- **MongoDB sources (no schema)**: the engine infers the schema from the 10,000 newest documents. A field missing from new documents is not treated as dropped, so there are no false freezes.
+- **Several pipelines in parallel**, fully isolated from one another.
 
-**Vận hành**
-- **Config-as-code**: mỗi pipeline là một file `config/pipelines/*.yaml`. Sửa trên Web UI hay sửa file đều được; engine tự nạp lại trong khoảng 3 giây, không cần restart. File lỗi chỉ làm tắt pipeline đó, kèm thông báo lỗi rõ ràng.
-- **Bí mật tách riêng**: YAML chỉ ghi `${TÊN}`, giá trị thật nằm trong `config/secrets.env` (đã gitignore). Mật khẩu gõ trên form được tự chuyển sang file này.
-- **Cảnh báo Telegram** khi có thay đổi breaking, khi bảng được duyệt, và khi nguồn tự hoàn tác.
-- **Xác thực API (tuỳ chọn)**: token cho vai trò `admin` (mọi lệnh ghi) và `reporter` (chỉ Reporting API).
-- **Ba mức tích hợp**: (1) chỉ cần khai báo YAML; (2) khai báo thêm các thành phần để engine đo consumer lag và báo thành phần nào im lặng; (3) engine tự điều khiển sink Kafka Connect có sẵn.
+**Operations**
+- **Config as code**: one `config/pipelines/*.yaml` file per pipeline. Edit it in the web UI or in the file; the engine reloads it within about 3 seconds, without a restart. A broken file disables only that pipeline, with a clear error.
+- **Secrets kept apart**: YAML holds only `${NAME}` references, and the real values live in `config/secrets.env` (gitignored). Passwords typed in the web form are moved there automatically.
+- **Telegram alerts** for breaking changes, approvals, and changes reverted at the source.
+- **Optional API authentication**: tokens with an `admin` role (all writes) or a `reporter` role (Reporting API only).
+- **Three integration levels**: (1) declare a YAML file, nothing more; (2) also declare the pipeline's components, so the engine measures consumer lag and flags components that stop reporting; (3) let the engine control an existing Kafka Connect sink.
 
 **Web UI** (`http://localhost:5173`)
-- **Pipelines Overview**: mỗi màn hình một pipeline, chuyển bằng nút `‹ ›`, mặc định là pipeline mới nhất. Hiện trạng thái gate của từng bảng, các thành phần data plane (rows/s, độ trễ, sparkline), và Live CDC Event Stream.
-- **Monitored Tables**: danh sách bảng, lịch sử phiên bản, bản nháp chờ duyệt, sandbox, Approve và Reject. Trang tự cập nhật mỗi 2 giây, không cần F5.
-- **Live CDC Stream**: sự kiện schema, phân trang, xoá từng sự kiện hoặc xoá hết.
-- **Pipeline Topology**, **Configuration** (sửa `main.yaml` và các pipeline), **Schema Editor**. Giao diện có tiếng Việt và tiếng Anh, chế độ sáng và tối.
+- **Pipelines Overview**: one pipeline per screen with `‹ ›` buttons, newest first. Shows each table's gate state, the data-plane components (rows/s, lag, sparkline), and the Live CDC Event Stream.
+- **Monitored Tables**: table list, version history, pending drafts, sandbox, Approve and Reject. The page refreshes itself every 2 seconds, no F5 needed.
+- **Live CDC Stream**: schema events, paginated, with delete-one and clear-all.
+- **Pipeline Topology**, **Configuration** (edit `main.yaml` and the pipelines), **Schema Editor**. English and Vietnamese, light and dark themes.
 
 ---
 
-## 4. Cơ sở dữ liệu được hỗ trợ
+## 4. Supported databases
 
-| Vai trò | Hỗ trợ |
+| Role | Supported |
 |---|---|
-| **Nguồn** | PostgreSQL, MySQL, MongoDB |
-| **Đích** | ClickHouse, PostgreSQL, MySQL, hoặc `none` (chỉ giám sát và cảnh báo, không chạy DDL) |
+| **Source** | PostgreSQL, MySQL, MongoDB |
+| **Target** | ClickHouse, PostgreSQL, MySQL, or `none` (monitor and alert only, no DDL) |
 
-Nguồn và đích được phép khác loại, ví dụ MongoDB → ClickHouse hay Postgres → MySQL. Engine dùng chung một bộ tên kiểu (`int`, `bigint`, `numeric`, `text`, `timestamp`, `json`...) rồi tự chuyển sang kiểu riêng của từng hệ quản trị.
+Source and target may be different systems, for example MongoDB → ClickHouse or Postgres → MySQL. The engine uses one shared set of type names (`int`, `bigint`, `numeric`, `text`, `timestamp`, `json`...) and renders each one in the target's own type.
 
-Muốn thêm một hệ quản trị khác (SQL Server, Oracle...), viết một class kế thừa `BaseEngine` trong [`src/schema_evolution/engines/`](src/schema_evolution/engines/) (có thể lấy [`mysql.py`](src/schema_evolution/engines/mysql.py) làm mẫu), rồi đăng ký nó trong `ENGINE_REGISTRY` ở [`app/scheduler.py`](app/scheduler.py).
+To add another database (SQL Server, Oracle...), write a class that extends `BaseEngine` in [`src/schema_evolution/engines/`](src/schema_evolution/engines/) ([`mysql.py`](src/schema_evolution/engines/mysql.py) is a good template) and register it in `ENGINE_REGISTRY` in [`app/scheduler.py`](app/scheduler.py).
 
 ---
 
-## 5. Cài đặt và chạy demo
+## 5. Setup and running the demo
 
-Demo là một pipeline thật: giao dịch Binance được ghi vào Postgres, Debezium đưa lên Kafka, rồi loader ghi sang ClickHouse. Cùng lúc đó chạy thêm một pipeline MongoDB và một sink Kafka Connect. Script khởi động được viết cho **Windows + PowerShell**.
+The demo is a live pipeline: Binance trades go into Postgres, Debezium publishes them to Kafka, and a loader writes them to ClickHouse. A MongoDB pipeline and a Kafka Connect sink run alongside it. The start script targets **Windows + PowerShell**.
 
-**Cần có:** Docker Desktop, Python 3.11, Node.js 18 trở lên.
+**Requirements:** Docker Desktop, Python 3.11, Node.js 18 or later.
 
 ```powershell
 git clone https://github.com/HakoNguyen/schema_evolution.git
@@ -127,81 +129,81 @@ python -m venv venv
 pip install -r requirements.txt
 cd frontend; npm install; cd ..
 
-Copy-Item config\secrets.env.example config\secrets.env   # mật khẩu mặc định của stack Docker đã có sẵn
+Copy-Item config\secrets.env.example config\secrets.env   # the Docker stack's default passwords are already filled in
 powershell -ExecutionPolicy Bypass -File demo\start.ps1 -Reset
 ```
 
-Muốn nhận cảnh báo qua Telegram thì điền `TELEGRAM_BOT_TOKEN` và `TELEGRAM_CHAT_ID` trong `config/secrets.env`. Để trống thì engine bỏ qua bước gửi cảnh báo.
+To receive Telegram alerts, fill in `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `config/secrets.env`. If they are empty, the engine skips alerts.
 
-`start.ps1 -Reset` làm theo thứ tự:
-1. Bật Postgres, MongoDB, ClickHouse, Redpanda và Debezium.
-2. Dựng lại toàn bộ dữ liệu demo ở schema v1, cùng 3 connector (Postgres, MongoDB, JDBC sink).
-3. Mở mỗi tiến trình trong một cửa sổ riêng: `backend`, `frontend`, `ingestor`, `loader`, `naive-loader`, `tickers-loader`, `orders-app`, `orders-loader`, `check`.
+`start.ps1 -Reset` does the following, in order:
+1. Starts Postgres, MongoDB, ClickHouse, Redpanda and Debezium.
+2. Rebuilds all demo data at schema v1, with 3 connectors (Postgres, MongoDB, JDBC sink).
+3. Opens one window per process: `backend`, `frontend`, `ingestor`, `loader`, `naive-loader`, `tickers-loader`, `orders-app`, `orders-loader`, `check`.
 
-Sau khoảng **1 phút**, mở **http://localhost:5173**. Nên dùng `localhost`, không dùng `127.0.0.1`.
+After about **one minute**, open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`.
 
-| Dịch vụ | Địa chỉ trên máy |
+| Service | Address on the host |
 |---|---|
 | Web UI (Vite) | http://localhost:5173 |
 | Engine API (FastAPI) | http://127.0.0.1:8000 |
-| Postgres (nguồn) | `localhost:5431`: `admin` / `password123` |
-| MongoDB (replica set `rs0`) | `localhost:27018`, kết nối với `directConnection=true` |
+| Postgres (source) | `localhost:5431`: `admin` / `password123` |
+| MongoDB (replica set `rs0`) | `localhost:27018`, connect with `directConnection=true` |
 | ClickHouse | `localhost:8123`: `default` / `clickhouse123` |
-| Kafka (Redpanda) | `localhost:19092`, giao diện Redpanda Console ở http://localhost:8086 |
+| Kafka (Redpanda) | `localhost:19092`, Redpanda Console at http://localhost:8086 |
 | Kafka Connect (Debezium) | http://localhost:8083 |
 
-**Chạy bằng một Docker image.** Engine, API và Web UI nằm chung một image, dùng chung một cổng:
+**Running from one Docker image.** The engine, API and web UI are packaged in one image, served on one port:
 
 ```powershell
-docker compose up -d --build engine     # mở http://localhost:8000
+docker compose up -d --build engine     # then open http://localhost:8000
 docker compose stop engine
 ```
 
-Image này dùng cùng `config/` và `data/` với máy host, và **không được** chạy cùng lúc với `uvicorn` trên máy, vì cả hai đều chiếm cổng 8000.
+The image uses the same `config/` and `data/` as the host. Do **not** run it alongside `uvicorn` on the host: both use port 8000.
 
 ---
 
-## 6. Các kịch bản demo
+## 6. Demo scenarios
 
-Mỗi lệnh dưới đây đóng vai dev đổi schema ở nguồn, rồi đo thời gian engine phản ứng. Chạy trong PowerShell, sau khi đã `.\venv\Scripts\Activate.ps1`.
+Each command below plays the developer changing the source schema, then measures how long the engine takes to react. Run them in PowerShell after `.\venv\Scripts\Activate.ps1`.
 
 **Pipeline `market_trades` (Postgres → ClickHouse)**
 
-| Lệnh `python -m demo.scenario ...` | SQL chạy trên nguồn | Kết quả mong đợi |
+| `python -m demo.scenario ...` | SQL run on the source | Expected result |
 |---|---|---|
-| `add_column` | `ALTER TABLE trades ADD COLUMN is_buyer_maker BOOLEAN` | ClickHouse tự có cột mới. `loader` chạy tiếp, còn `naive-loader` (đối chứng, không có engine) chết với lỗi `Unrecognized column` |
-| `widen` | `ALTER TABLE trades ALTER COLUMN price TYPE NUMERIC(24,8)` | `price` ở ClickHouse tự thành `Decimal(24, 8)` |
-| `rename` | `ALTER TABLE trades RENAME COLUMN qty TO quantity` | Bảng bị freeze, loader `paused`. Duyệt trên UI (Sandbox rồi Approve) thì loader ghi tiếp, kể cả các message cũ còn mang tên `qty` |
-| `narrow` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(10)` | Bảng bị freeze (nguy cơ cắt cụt dữ liệu). **Không** Approve |
-| `rollback` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(20)` | Nguồn khớp lại baseline, engine tự gỡ freeze |
+| `add_column` | `ALTER TABLE trades ADD COLUMN is_buyer_maker BOOLEAN` | ClickHouse gets the new column automatically. `loader` keeps running; `naive-loader` (the control pipeline, no engine) dies with `Unrecognized column` |
+| `widen` | `ALTER TABLE trades ALTER COLUMN price TYPE NUMERIC(24,8)` | `price` in ClickHouse becomes `Decimal(24, 8)` automatically |
+| `rename` | `ALTER TABLE trades RENAME COLUMN qty TO quantity` | The table freezes and the loader shows `paused`. Approve it in the UI (Sandbox, then Approve) and the loader continues, including old messages that still carry `qty` |
+| `narrow` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(10)` | The table freezes (risk of truncation). Do **not** approve |
+| `rollback` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(20)` | The source matches the baseline again, so the engine unfreezes the table |
 
-**Pipeline `market_tickers`**: `tickers_drop` (`DROP COLUMN low_price`) làm **chỉ** pipeline này bị freeze, còn `market_trades` vẫn chạy. `tickers_restore` thêm lại cột thì bảng tự mở lại. Nếu bật thêm pipeline `market_tickers_replica` (mức 3), engine còn tự **pause** sink Kafka Connect khi freeze và **resume** khi mở lại.
+**Pipeline `market_tickers`**: `tickers_drop` (`DROP COLUMN low_price`) freezes **only** this pipeline while `market_trades` keeps running. `tickers_restore` adds the column back and the table reopens. If the `market_tickers_replica` pipeline (level 3) is enabled, the engine also **pauses** its Kafka Connect sink during the freeze and **resumes** it afterwards.
 
-**Pipeline `shop_orders` (MongoDB → ClickHouse).** Mongo không có `ALTER`. "Đổi schema" ở đây là app ra bản mới, ghi document theo hình dạng khác:
+**Pipeline `shop_orders` (MongoDB → ClickHouse).** MongoDB has no `ALTER`; a "schema change" is the app shipping a release that writes documents of a different shape:
 
-| Lệnh | App làm gì | Kết quả mong đợi |
+| Command | What the app does | Expected result |
 |---|---|---|
-| `orders_add_field` | Ghi thêm field `coupon_code` | ClickHouse tự có cột `coupon_code` |
-| `orders_drop_field` | Thôi ghi field `note` | **Không** freeze giả: field vắng mặt không có nghĩa là đã xoá |
-| `orders_bad_type` | Ghi `amount` thành chuỗi `"12.50"` | Bảng bị freeze, loader dừng |
-| `orders_fix` | Rollback app và đổi các `amount` dạng chuỗi về số | Engine tự gỡ freeze |
+| `orders_add_field` | Writes a new `coupon_code` field | ClickHouse gets a `coupon_code` column automatically |
+| `orders_drop_field` | Stops writing `note` | **No** false freeze: a missing field does not mean a dropped one |
+| `orders_bad_type` | Writes `amount` as the string `"12.50"` | The table freezes and the loader stops |
+| `orders_fix` | Rolls the app back and converts string amounts to numbers | The engine unfreezes the table |
 
-Kiểm chứng cuối bằng `python -m demo.check`: tính tới một mốc thời gian, nguồn và kho phải **khớp từng dòng**.
+The final check is `python -m demo.check`: up to a given point in time, the source and the warehouse must **match row for row**.
 
-Chi tiết từng bước, cách đọc kết quả, các tình huống lỗi hay gặp: xem [`demo/README.md`](demo/README.md).
+Step-by-step details, how to read the output and common problems: see [`demo/README.md`](demo/README.md).
 
 ---
 
-## 7. Khai báo pipeline
+## 7. Declaring a pipeline
 
-Có hai cách: thả một file YAML vào `config/pipelines/`, hoặc điền form ở trang **Configuration**. Ví dụ:
+Either drop a YAML file into `config/pipelines/`, or fill in the form on the **Configuration** page. Example:
 
 ```yaml
 name: market_trades
 detection:
-  mode: event_driven                  # hoặc polling (kèm interval_seconds)
+  mode: event_driven                  # or polling (with interval_seconds)
   kafka:
-    topic: market                     # tiền tố topic Debezium: khớp market.public.trades
+    topic: market                     # Debezium topic prefix: matches market.public.trades
   fallback_polling_interval_seconds: 60
 source:
   type: postgres
@@ -213,15 +215,15 @@ tables:
   - trades
 ```
 
-- `kafka.topic` là **tiền tố**: `market` khớp với `market.public.trades`. Đặt sai thì engine không nhận được sự kiện, chỉ phát hiện thay đổi ở lần quét dự phòng.
-- Khi tạo pipeline trên form, ô cổng nguồn mặc định là `5432`; với stack demo phải đổi thành **`5431`**.
-- Tài liệu đầy đủ: [`CONFIGURATION_GUIDE.md`](CONFIGURATION_GUIDE.md). Ở đó có thêm: nhiều Kafka cluster, đặt tên bảng đích khác nguồn, cấu hình nào cần restart, khai báo `components:` và bật xác thực.
+- `kafka.topic` is a **prefix**: `market` matches `market.public.trades`. With the wrong value the engine receives no events and only notices changes at the fallback scan.
+- When you create a pipeline in the form, the source port defaults to `5432`; for the demo stack it must be **`5431`**.
+- Full reference: [`CONFIGURATION_GUIDE.md`](CONFIGURATION_GUIDE.md) (in Vietnamese). It also covers several Kafka clusters, renamed target tables, which settings need a restart, the `components:` block, and authentication.
 
 ---
 
-## 8. Tích hợp với data plane
+## 8. Integrating your data plane
 
-Engine không cần biết bên trong loader của bạn. Loader chỉ cần:
+The engine does not need to know how your loader works. The loader only needs to:
 
 ```http
 GET /api/gate/{pipeline}/{table}
@@ -230,80 +232,80 @@ GET /api/gate/{pipeline}/{table}
    "column_renames": {"qty": "quantity"}}
 ```
 
-- `frozen`: **dừng ghi** bảng đó và không commit offset, cho tới khi trạng thái về lại `open`.
-- Message có cột mà bảng đích chưa có: **chờ** (HOLD) cho tới khi engine thêm xong cột, đừng bỏ cột đó đi.
-- Không gọi được engine: giữ trạng thái đã biết gần nhất (fail-static).
+- `frozen`: **stop writing** that table and do not commit offsets until the state is `open` again.
+- A message with a column the target does not have yet: **wait** (HOLD) until the engine has added it; do not drop the column.
+- Engine unreachable: keep the last known state (fail-static).
 
-Ngoài ra, nếu muốn trạng thái của loader hiện trên Overview, gửi thêm báo cáo (không bắt buộc):
+Optionally, report the loader's state so it appears on the Overview:
 
 ```http
 POST /api/pipelines/{pipeline}/components/{name}
 {"state": "running", "role": "warehouse sink", "metrics": {"rows_per_sec": 512.3, "lag_seconds": 1.6}}
 ```
 
-Ví dụ hoàn chỉnh: [`demo/loader.py`](demo/loader.py) (`FreezeGate`, `Reporter`). Với sink Kafka Connect không sửa được code, chỉ cần khai báo nó dưới `components:` trong YAML; engine sẽ tự pause và resume connector (xem `CONFIGURATION_GUIDE.md` mục 5).
+A complete example is [`demo/loader.py`](demo/loader.py) (`FreezeGate`, `Reporter`). For a Kafka Connect sink whose code you cannot change, declare it under `components:` in the pipeline YAML and the engine pauses and resumes the connector itself (see section 5 of `CONFIGURATION_GUIDE.md`).
 
 ---
 
-## 9. Kết quả đo
+## 9. Measured results
 
-Lần dượt toàn bộ demo ngày **12/11/2026** (Windows 11, Docker Desktop, dữ liệu Binance thật). Mỗi kịch bản chạy một lần; thời gian tính từ lúc thay đổi có hiệu lực ở nguồn.
+Full demo rehearsal on **2026-11-12** (Windows 11, Docker Desktop, live Binance data). Each scenario ran once; times are measured from the moment the change takes effect at the source.
 
-| Kịch bản | Kết quả | Thời gian |
+| Scenario | Result | Time |
 |---|---|---|
-| Thêm cột (Postgres) | ClickHouse tự có cột mới; pipeline đối chứng chết | 1,08 giây |
-| Nới kiểu `price` | `Decimal(18,8)` thành `Decimal(24,8)` | 0,95 giây |
-| Thu hẹp kiểu (breaking) | Bảng bị freeze, loader `paused` | 0,99 giây |
-| Nguồn hoàn tác | Engine tự gỡ freeze | 0,58 giây |
-| Duyệt `RENAME` | Sandbox pass, bảng mở lại ở v4, loader ghi tiếp | 7,4 giây (tới khi loader chạy lại) |
-| Thêm field (MongoDB) | ClickHouse tự có `coupon_code` | 0,78 giây |
-| Sink Kafka Connect (mức 3) | Connector PAUSED khi freeze, RUNNING khi mở lại | khoảng 4 giây mỗi chiều |
-| Đối chiếu cuối (`demo.check`) | **21.098 / 21.098 dòng khớp**; pipeline đối chứng thiếu 17.509 dòng | |
-| Bảng replica (mức 3) | Giống hệt bảng nguồn (khớp mã băm md5) | |
+| Add a column (Postgres) | ClickHouse gets the column; the control pipeline dies | 1.08 s |
+| Widen `price` | `Decimal(18,8)` becomes `Decimal(24,8)` | 0.95 s |
+| Narrow a type (breaking) | Table frozen, loader `paused` | 0.99 s |
+| Source reverts | Engine unfreezes the table | 0.58 s |
+| Approve a `RENAME` | Sandbox passes, table reopens at v4, loader continues | 7.4 s (until the loader runs again) |
+| Add a field (MongoDB) | ClickHouse gets `coupon_code` | 0.78 s |
+| Kafka Connect sink (level 3) | Connector PAUSED on freeze, RUNNING on reopen | about 4 s each way |
+| Final check (`demo.check`) | **21,098 / 21,098 rows match**; the control pipeline is missing 17,509 rows | |
+| Replica table (level 3) | Identical to the source table (same md5 hash) | |
 
-Số đo lặp lại nhiều lần (p50, p95) do `python -m demo.bench` tạo ra, được lưu trong [`demo/results/`](demo/results/).
+Repeated measurements (p50, p95) produced by `python -m demo.bench` are stored in [`demo/results/`](demo/results/).
 
 ---
 
-## 10. Kiểm thử
+## 10. Tests
 
-Các test không cần hạ tầng. Mỗi file test chạy trực tiếp bằng Python (repo không dùng pytest):
+The tests need no infrastructure. Each test file runs directly with Python (the repository does not use pytest):
 
 ```powershell
 Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }
 ```
 
-`tests/test_payload_pipeline.py` là test tích hợp cũ: nó cần một pipeline tên `mongo_to_clickhouse` (không còn trong repo) và một MongoDB ở cổng 27017, nên hiện đang lỗi.
+`tests/test_payload_pipeline.py` is an old integration test: it expects a pipeline named `mongo_to_clickhouse` (no longer in the repository) and a MongoDB on port 27017, so it currently fails.
 
 ---
 
-## 11. Cấu trúc thư mục
+## 11. Repository layout
 
 ```
-api/            FastAPI: Gate API, Reporting API, duyệt / từ chối, sandbox, cấu hình
-app/            PipelineManager (nạp lại cấu hình), Kafka consumer, worker từng pipeline, thành phần (mức 2-3), CLI
+api/            FastAPI: Gate API, Reporting API, approve / reject, sandbox, configuration
+app/            PipelineManager (config reload), Kafka consumer, per-pipeline workers, components (levels 2-3), CLI
 src/schema_evolution/
-  core.py       registry, so sánh và phân loại thay đổi, luồng kiểm tra và freeze
-  engines/      Postgres, MySQL, MongoDB, ClickHouse: đọc metadata, sinh DDL, sandbox
+  core.py       registry, schema diff and classification, check-and-freeze flow
+  engines/      Postgres, MySQL, MongoDB, ClickHouse: metadata, DDL generation, sandbox
 frontend/       Web UI (React + Vite)
 config/         main.yaml, pipelines/*.yaml, secrets.env.example
-demo/           pipeline demo: ingestor, loader, orders_app, setup, scenario, check, bench, start.ps1
-debezium/       docker-compose của Redpanda + Debezium Connect
-tests/          test đơn vị và test tích hợp
-Dockerfile      image chung cho engine, API và Web UI
+demo/           demo pipeline: ingestor, loader, orders_app, setup, scenario, check, bench, start.ps1
+debezium/       docker-compose for Redpanda + Debezium Connect
+tests/          unit and integration tests
+Dockerfile      one image for the engine, API and web UI
 ```
 
 ---
 
-## 12. Hạn chế đã biết
+## 12. Known limitations
 
-- **Phải có baseline trước khi đổi schema.** Nếu engine chưa kết nối được nguồn hoặc đích (sai cổng, sai mật khẩu) mà nguồn đã đổi schema, baseline v1 sẽ chụp luôn thay đổi đó, và engine sẽ không bao giờ phản ứng với nó nữa. Trước mỗi kịch bản, hãy kiểm tra bảng đang ở trạng thái `vN open` với N ≥ 1.
-- **MongoDB:** engine không nhận ra được việc đổi tên field (chỉ thấy một field mới). Sửa lỗi kiểu dữ liệu đòi hỏi sửa cả các document đã ghi, vì engine lấy mẫu 10.000 document mới nhất.
-- **ClickHouse dùng image `latest`.** Bản 26.x nén dữ liệu bằng ZSTD theo mặc định, nên driver JDBC 0.8.x của DBeaver báo `Invalid LZ4 magic byte`. Cách khắc phục: thêm thuộc tính driver `compress=false`.
-- Script khởi động demo (`start.ps1`) chỉ dành cho Windows. Engine và API thì chạy được ở mọi nơi có Python, hoặc qua Docker image.
+- **A baseline must exist before the schema changes.** If the engine cannot reach the source or target yet (wrong port, wrong password) while the source schema changes, baseline v1 captures the change itself and the engine never reacts to it. Before each scenario, check that the table shows `vN open` with N ≥ 1.
+- **MongoDB:** the engine cannot recognise a renamed field (it only sees a new one). Fixing a bad type also requires fixing the documents already written, because the engine samples the 10,000 newest documents.
+- **ClickHouse uses the `latest` image.** Version 26.x compresses with ZSTD by default, so DBeaver's 0.8.x JDBC driver reports `Invalid LZ4 magic byte`. Fix: set the driver property `compress=false`.
+- The demo start script (`start.ps1`) is Windows-only. The engine and API run anywhere Python runs, or from the Docker image.
 
 ---
 
-## Giấy phép
+## License
 
-MIT. Xem [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).
