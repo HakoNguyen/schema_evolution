@@ -258,7 +258,8 @@ def get_pipeline_topology():
                 }
             }
         else:
-            interval = config.get("scheduler", {}).get("interval_seconds", 60)
+            # Cùng nguồn với PipelineWorker: chu kỳ riêng của pipeline, không có thì lấy mặc định chung.
+            interval = detection.get("interval_seconds") or config.get("scheduler", {}).get("interval_seconds", 60)
             transport = {
                 "kind": "scheduler",
                 "type": "Polling Scheduler",

@@ -5,7 +5,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 # Demo chỉ nói chuyện với engine qua HTTP (Gate API + Reporting API), không đọc file nội bộ của engine.
-ENGINE_API = os.getenv("DEMO_ENGINE_API", "http://localhost:8000")
+# 127.0.0.1, không phải localhost: trên Windows "localhost" thử IPv6 (::1) trước, uvicorn chỉ nghe IPv4
+# -> mỗi kết nối mới tới engine chậm thêm ~2s (làm sai số đo của demo.scenario và chậm loader khi kết nối lại).
+ENGINE_API = os.getenv("DEMO_ENGINE_API", "http://127.0.0.1:8000")
 ENGINE_TOKEN = os.getenv("DEMO_ENGINE_TOKEN")  # token vai reporter khi engine bật auth.users
 
 PG = {
