@@ -22,7 +22,7 @@ from app.scheduler import (
 )
 from app.secret_store import load_env, secrets_path
 from app.components import LagReader, build_observed
-from src.schema_evolution.core import SchemaRegistry, make_registry_key, run_evolution_check
+from src.schema_evolution.core import DEFAULT_COMPATIBILITY, SchemaRegistry, make_registry_key, run_evolution_check
 from src.schema_evolution.notification import TelegramNotifier
 
 SYNC_SECONDS = 3
@@ -90,7 +90,8 @@ class PipelineWorker:
     def _check(self, table: str, source: str) -> dict:
         result = run_evolution_check(self.source, self.target, table, self.registry, self.notifier,
                                      registry_key=make_registry_key(self.name, table),
-                                     target_table=(self.spec.get("table_targets") or {}).get(table))
+                                     target_table=(self.spec.get("table_targets") or {}).get(table),
+                                     compatibility=self.spec.get("compatibility", DEFAULT_COMPATIBILITY))
         print(f"[{self.name}] {table}: {result['status']} ({source})")
         log_detected_change(self.name, table, result, source=source)
         if result["status"] == "changes_applied":

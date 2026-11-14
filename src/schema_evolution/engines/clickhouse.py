@@ -240,14 +240,11 @@ class ClickHouseEngine(BaseEngine):
                     f"ALTER TABLE {change.table_name} "
                     f"MODIFY COLUMN {_q(change.column_name)} {type_sql}"
                 )
-            elif change.change_type == ChangeType.ADD_FOREIGN_KEY:
-                # ClickHouse không có FK -> nếu gặp trường hợp này (không nên
-                # xảy ra vì Mongo source luôn trả foreign_keys=[]) thì báo lỗi
-                # rõ ràng thay vì âm thầm bỏ qua.
-                raise ValueError(
-                    "ClickHouseEngine không hỗ trợ ADD_FOREIGN_KEY — ClickHouse "
-                    "không có ràng buộc khoá ngoại ở DB level."
-                )
+            elif change.change_type in (ChangeType.ADD_FOREIGN_KEY, ChangeType.CHANGE_FOREIGN_KEY_TARGET,
+                                        ChangeType.CHANGE_FOREIGN_KEY_ACTION):
+                # Nguồn Postgres/MySQL đổi khoá ngoại: ClickHouse không có FK nên không có DDL nào để chạy.
+                # Sau khi kỹ sư duyệt, chỉ cần cập nhật baseline; raise ở đây sẽ làm Approve thất bại mãi.
+                statements.append(f"-- NO-OP: ClickHouse khong co FK ({change.constraint_name})")
             else:
                 raise ValueError(
                     f"ClickHouseEngine.generate_ddl không hỗ trợ "
@@ -294,6 +291,8 @@ class ClickHouseEngine(BaseEngine):
             # 2. Apply DDL to sandbox tables
             statements = self.generate_ddl(changes)
             for stmt, change in zip(statements, changes):
+                if stmt.startswith("--"):
+                    continue  # no-op (VD khoá ngoại): server báo "Empty query" nếu gửi lên
                 sandbox_name = sandbox_table(change.table_name)
                 sandbox_stmt = stmt.replace(
                     f"ALTER TABLE {change.table_name} ",

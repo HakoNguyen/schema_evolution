@@ -71,6 +71,7 @@ export default function PipelineConfig() {
         detectionMode: pipeline.detection?.mode || 'polling',
         kafkaTopic: pipeline.detection?.kafka?.topic || pipeline.name || '',
         intervalSeconds: pipeline.detection?.interval_seconds ?? '',
+        compatibility: pipeline.compatibility || 'backward',
         sourceType: pipeline.source?.type || 'postgres',
         sourceHost: pipeline.source?.config?.host || 'localhost',
         sourcePort: pipeline.source?.config?.port || 5432,
@@ -92,6 +93,7 @@ export default function PipelineConfig() {
         detectionMode: 'polling',
         kafkaTopic: '',
         intervalSeconds: '',
+        compatibility: 'backward',
         sourceType: 'postgres',
         sourceHost: 'localhost',
         sourcePort: 5432,
@@ -177,6 +179,7 @@ export default function PipelineConfig() {
     const payload = {
       ...base,
       name: formData.name,
+      compatibility: formData.compatibility,
       detection,
       source: withConnection(base.source, formData.sourceType, formData.sourceHost, formData.sourcePort,
                              formData.sourceDb, formData.sourceUser, formData.sourcePassword),
@@ -467,6 +470,9 @@ export default function PipelineConfig() {
                           ? <>topic <code>{pipe.detection?.kafka?.topic || pipe.name}</code></>
                           : t('periodic_scan')}
                       </div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '2px' }}>
+                        policy <code>{(pipe.compatibility || 'backward').toUpperCase()}</code>
+                      </div>
                     </td>
                     <td>
                       <div style={{ fontWeight: 500, fontSize: '0.8rem', textTransform: 'uppercase' }}>{pipe.source?.type}</div>
@@ -606,6 +612,17 @@ export default function PipelineConfig() {
                       />
                     </div>
                   )}
+                </div>
+                <div style={{ marginTop: '10px' }}>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('compatibility_label')}</label>
+                  <select
+                    value={formData.compatibility}
+                    onChange={e => setFormData({ ...formData, compatibility: e.target.value })}
+                    style={{ width: '100%', padding: '8px', background: 'var(--card-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)' }}
+                  >
+                    {['backward', 'forward', 'full', 'none'].map(m => <option key={m} value={m}>{t(`compat_${m}`)}</option>)}
+                  </select>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '4px' }}>{t('compat_hint')}</div>
                 </div>
               </div>
 

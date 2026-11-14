@@ -8,6 +8,7 @@ import PipelineTopology from './components/PipelineTopology';
 import LiveEventStream from './components/LiveEventStream';
 import PipelineConfig from './components/PipelineConfig';
 import PipelinesOverview from './components/PipelinesOverview';
+import Dashboard from './components/Dashboard';
 import { useToast } from './components/NotificationToast';
 import { useLanguage } from './context/LanguageContext';
 import { Languages, Sun, Moon, ArrowLeft } from 'lucide-react';
@@ -16,7 +17,7 @@ const POLL_MS = 2000; // cùng nhịp với Pipelines Overview và Live CDC Stre
 
 function App() {
   const [tables, setTables] = useState([]);
-  const [activePage, setActivePage] = useState('data_flow'); // 'data_flow' | 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
+  const [activePage, setActivePage] = useState('data_flow'); // 'data_flow' | 'dashboard' | 'monitored_tables' | 'pipeline_topology' | 'live_events' | 'pipeline_config' | 'edit_schema'
   const [selectedKey, setSelectedKey] = useState(null);
   const [details, setDetails] = useState(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
@@ -104,6 +105,7 @@ function App() {
           <div className="header-breadcrumbs">
             <span>{t('clusters')}</span> / 
             {activePage === 'monitored_tables' && !selectedKey && <span className="highlight"> {t('monitored_tables')}</span>}
+            {activePage === 'dashboard' && <span className="highlight"> {t('dashboard')}</span>}
             {activePage === 'data_flow' && <span className="highlight"> {t('overview')}</span>}
             {activePage === 'pipeline_topology' && <span className="highlight"> {t('pipeline_topology')}</span>}
             {activePage === 'live_events' && <span className="highlight"> {t('live_cdc_stream')}</span>}
@@ -134,6 +136,10 @@ function App() {
 
         <div className="content-scroll">
           {/* PAGE: Pipelines Overview (mọi pipeline, mọi thành phần tự báo cáo) */}
+          {activePage === 'dashboard' && (
+            <Dashboard onOpenTable={(key) => { setActivePage('monitored_tables'); setSelectedKey(key); setRefreshTrigger(p => p + 1); }} />
+          )}
+
           {activePage === 'data_flow' && (
             <PipelinesOverview onReview={(key) => { setActivePage('monitored_tables'); setSelectedKey(key); setRefreshTrigger(p => p + 1); }} />
           )}

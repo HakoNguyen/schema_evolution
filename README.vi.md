@@ -78,7 +78,8 @@ Ba nguyên tắc thiết kế:
 ## 3. Tính năng
 
 **Engine**
-- Phân loại tự động: thêm cột, nới kiểu, `NOT NULL → NULL` là không breaking; đổi tên (tự suy luận cặp cột cũ/mới), xoá cột, thu hẹp kiểu, đổi kiểu không tương thích là breaking.
+- Phân loại tự động: thêm cột, nới kiểu, `NOT NULL → NULL` là không breaking; đổi tên (tự suy luận cặp cột cũ/mới), xoá cột, thu hẹp kiểu, đổi kiểu không tương thích là breaking. Thay đổi quan hệ (thêm, bỏ, đổi khoá chính hay khoá ngoại) cũng được phát hiện.
+- **Chính sách tiến hoá theo mức tương thích** `backward | forward | full | none` cho từng pipeline (`compatibility:` trong YAML). Mỗi thay đổi được gắn nhãn tương thích backward/forward; chỉ thay đổi đạt mức đã chọn mới được tự đồng bộ. Xem `CONFIGURATION_GUIDE.md` mục 2.
 - Đồng bộ đích **không mất mát**: `NUMERIC` → `Decimal` (không dùng `Float64` vốn làm tròn tiền), `TIMESTAMP` → `DateTime64(6)`, `DATE` → `Date32`.
 - **Sandbox trước khi duyệt**: Postgres chạy DDL trong transaction rồi `ROLLBACK`; MySQL và ClickHouse clone bảng, chép mẫu dữ liệu thật rồi chạy DDL trên bản sao.
 - **Duyệt và từ chối** trên Web UI hoặc CLI (`python -m app.unfreeze_cli list | view | approve | reject <pipeline/bảng>`). Lịch sử ghi lại ai đã duyệt.
@@ -176,6 +177,8 @@ Mỗi lệnh dưới đây đóng vai dev đổi schema ở nguồn, rồi đo t
 | `rename` | `ALTER TABLE trades RENAME COLUMN qty TO quantity` | Bảng bị freeze, loader `paused`. Duyệt trên UI (Sandbox rồi Approve) thì loader ghi tiếp, kể cả các message cũ còn mang tên `qty` |
 | `narrow` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(10)` | Bảng bị freeze (nguy cơ cắt cụt dữ liệu). **Không** Approve |
 | `rollback` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(20)` | Nguồn khớp lại baseline, engine tự gỡ freeze |
+| `add_fk` | `ALTER TABLE trades ADD CONSTRAINT fk_trades_symbol FOREIGN KEY (symbol) REFERENCES tickers(symbol) NOT VALID` | Đổi quan hệ: bảng bị freeze. Message CDC không mang khoá ngoại, nên thay đổi này được phát hiện ở lần quét metadata định kỳ (tối đa khoảng 60 giây) |
+| `drop_fk` | `ALTER TABLE trades DROP CONSTRAINT fk_trades_symbol` | Nguồn khớp lại baseline, engine tự gỡ freeze |
 
 **Pipeline `market_tickers`**: `tickers_drop` (`DROP COLUMN low_price`) làm **chỉ** pipeline này bị freeze, còn `market_trades` vẫn chạy. `tickers_restore` thêm lại cột thì bảng tự mở lại. Nếu bật thêm pipeline `market_tickers_replica` (mức 3), engine còn tự **pause** sink Kafka Connect khi freeze và **resume** khi mở lại.
 
@@ -263,7 +266,7 @@ Lần dượt toàn bộ demo ngày **12/11/2026** (Windows 11, Docker Desktop, 
 | Đối chiếu cuối (`demo.check`) | **21.098 / 21.098 dòng khớp**; pipeline đối chứng thiếu 17.509 dòng | |
 | Bảng replica (mức 3) | Giống hệt bảng nguồn (khớp mã băm md5) | |
 
-Số đo lặp lại nhiều lần (p50, p95) do `python -m demo.bench` tạo ra, được lưu trong [`demo/results/`](demo/results/).
+Số đo lặp lại nhiều lần (p50, p95) do `python -m demo.bench` tạo ra, được lưu trong [`demo/results/`](demo/results/). Lệnh `python -m demo.charts` (cần `pip install matplotlib`) vẽ biểu đồ từ các số đo này vào `demo/results/charts/`.
 
 ---
 

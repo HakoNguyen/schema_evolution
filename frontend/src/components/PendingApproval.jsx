@@ -90,6 +90,11 @@ export default function PendingApproval({ registryKey, onResolved }) {
               {change.change_type}
             </span>
             <code>{change.column_name || change.constraint_name || '?'}</code>
+            {typeof change.backward_compatible === 'boolean' && ['backward', 'forward'].map(dir => (
+              <span key={dir} className={`pill ${change[`${dir}_compatible`] ? 'success' : 'danger'}`} style={{ fontSize: '0.72rem' }}>
+                {dir.toUpperCase()} {change[`${dir}_compatible`] ? '✓' : '✗'}
+              </span>
+            ))}
           </div>
         ))}
       </div>

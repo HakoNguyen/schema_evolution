@@ -1,5 +1,5 @@
 import React from 'react';
-import { Database, Network, Zap, LayoutTemplate, Sliders, GitBranch, Activity } from 'lucide-react';
+import { Database, Network, Zap, LayoutTemplate, Sliders, GitBranch, Activity, LayoutDashboard } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 export default function Sidebar({ activePage, setActivePage }) {
@@ -12,6 +12,7 @@ export default function Sidebar({ activePage, setActivePage }) {
     { id: 'live_events', label: t('live_cdc_stream'), icon: <Zap size={18} /> },
     { id: 'pipeline_config', label: t('pipeline_config'), icon: <Sliders size={18} /> },
     { id: 'edit_schema', label: t('schema_editor'), icon: <LayoutTemplate size={18} /> },
+    { id: 'dashboard', label: t('dashboard'), icon: <LayoutDashboard size={18} /> },
   ];
 
   return (

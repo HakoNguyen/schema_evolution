@@ -10,6 +10,7 @@ import yaml
 
 from app.secret_store import load_env, missing_error, resolve
 
+from src.schema_evolution.core import COMPATIBILITY_MODES, DEFAULT_COMPATIBILITY
 from src.schema_evolution.engines.base import BaseEngine
 from src.schema_evolution.engines.postgres import PostgresEngine 
 from src.schema_evolution.engines.mysql import MySQLEngine
@@ -156,6 +157,8 @@ def validate_pipeline_spec(spec) -> list[str]:
             errors += _connection_errors(role, part["type"], part["config"])
     errors += _table_errors(spec.get("tables"), spec.get("target") is not None)
     errors += _component_errors(spec.get("components"), spec.get("tables"))
+    if spec.get("compatibility", DEFAULT_COMPATIBILITY) not in COMPATIBILITY_MODES:
+        errors.append(f"compatibility: one of {', '.join(COMPATIBILITY_MODES)}")
     detection = spec.get("detection") or {}
     if not isinstance(detection, dict) or detection.get("mode", "polling") not in ("polling", "event_driven"):
         errors.append("detection.mode: polling or event_driven")
@@ -327,6 +330,9 @@ def log_detected_change(pipeline: str, table_name: str, result: dict, source: st
         ddl=f"[{source}] " + " | ".join(parts),
         status=status,
         severity="breaking" if status == "breaking_detected" else "non_breaking",
+        # Dashboard đếm theo loại thay đổi: dạng có cấu trúc, không phải tách lại từ chuỗi ddl.
+        changes=[{"type": c.change_type.value, "applied": True} for c in applied]
+        + [{"type": c.change_type.value, "applied": False} for c in pending],
     )
         
 def main(config_path: str = "config/main.yaml") -> None:
