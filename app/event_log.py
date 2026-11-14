@@ -34,7 +34,8 @@ class EventLog:
                 # shortcut: chỉ giữ 2000 sự kiện gần nhất trong file; cần lưu lâu hơn thì đẩy sang DB/log hệ thống.
                 path.write_text("".join(json.dumps(e) + "\n" for e in events[-2000:]), encoding="utf-8")
 
-    def add_event(self, pipeline_name: str, table_name: str, ddl: str, status: str, severity: str = "non_breaking") -> Dict[str, Any]:
+    def add_event(self, pipeline_name: str, table_name: str, ddl: str, status: str, severity: str = "non_breaking",
+                  changes: List[Dict[str, Any]] | None = None) -> Dict[str, Any]:
         with self._lock:
             self._counter += 1
             event = {
@@ -49,6 +50,7 @@ class EventLog:
                 "status": status,
                 "type": severity,
                 "severity": severity,
+                "changes": changes or [],
             }
             self._events.appendleft(event)
             if self._path is not None:
@@ -91,5 +93,5 @@ class EventLog:
                 continue  # dòng ghi dở: bỏ luôn
         atomic_write(self._path, "".join(kept))
 
-# Global singleton instance
-event_logger = EventLog()
+# Global singleton instance. 2000 = số sự kiện file JSONL giữ lại sau khi tỉa: dashboard thống kê trên toàn bộ.
+event_logger = EventLog(max_size=2000)

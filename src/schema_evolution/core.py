@@ -37,6 +37,59 @@ CHANGE_SEVERITY_MAP: dict[ChangeType, ChangeSeverity] = {
     ChangeType.CHANGE_FOREIGN_KEY_ACTION: ChangeSeverity.BREAKING,
 }
 
+# Mức tương thích (Evolution Policy) của pipeline, theo Kleppmann (DDIA ch.4) / Confluent Schema Registry:
+#   backward = schema MỚI đọc được dữ liệu CŨ   (bảng đích sau khi đổi vẫn chứa đúng mọi dòng cũ)
+#   forward  = schema CŨ đọc được dữ liệu MỚI   (consumer/dashboard chưa cập nhật vẫn chạy với dòng mới)
+#   full     = cả hai;  none = không kiểm tra tương thích.
+COMPATIBILITY_MODES = ("backward", "forward", "full", "none")
+DEFAULT_COMPATIBILITY = "backward"
+
+# (backward, forward) cho từng loại thay đổi. ADD_COLUMN / DROP_COLUMN phụ thuộc cột có "optional"
+# (nullable hoặc có default) hay không -> tính trong change_compatibility().
+_COMPATIBILITY: dict[ChangeType, tuple[bool, bool]] = {
+    ChangeType.RENAME_COLUMN: (False, False),
+    ChangeType.WIDEN_TYPE: (True, False),
+    ChangeType.NARROW_TYPE: (False, True),
+    ChangeType.CHANGE_TYPE_INCOMPATIBLE: (False, False),
+    ChangeType.NOT_NULL_TO_NULLABLE: (True, False),
+    ChangeType.NULLABLE_TO_NOT_NULL: (False, True),
+    ChangeType.ADD_PRIMARY_KEY: (False, False),
+    ChangeType.DROP_PRIMARY_KEY: (False, False),
+    ChangeType.CHANGE_PRIMARY_KEY: (False, False),
+    ChangeType.ADD_FOREIGN_KEY: (False, True),
+    ChangeType.DROP_FOREIGN_KEY: (True, False),
+    ChangeType.CHANGE_FOREIGN_KEY_TARGET: (False, False),
+    ChangeType.CHANGE_FOREIGN_KEY_ACTION: (False, False),
+}
+
+
+def _optional(col) -> bool:
+    return col is not None and (col.nullable or col.default is not None)
+
+
+def change_compatibility(change: SchemaChange) -> tuple[bool, bool]:
+    """(backward_compatible, forward_compatible) của 1 thay đổi."""
+    if change.change_type == ChangeType.ADD_COLUMN:
+        return _optional(change.new_value), True
+    if change.change_type == ChangeType.DROP_COLUMN:
+        return True, _optional(change.old_value)
+    return _COMPATIBILITY[change.change_type]
+
+
+def apply_compatibility_policy(changes: list[SchemaChange], mode: str) -> list[SchemaChange]:
+    """Enforcement: chỉ tự đồng bộ thay đổi vừa an toàn cho dữ liệu đích (severity gốc NON_BREAKING)
+    vừa đạt mức tương thích của pipeline; còn lại chuyển BREAKING -> freeze, chờ duyệt.
+    Policy chỉ làm chặt hơn: không mức nào cho phép engine tự chạy DDL phá dữ liệu (DROP, thu hẹp kiểu...)."""
+    def allowed(c: SchemaChange) -> bool:
+        backward, forward = change_compatibility(c)
+        return {"backward": backward, "forward": forward, "full": backward and forward}.get(mode, True)
+
+    return [
+        c if c.severity == ChangeSeverity.BREAKING or allowed(c)
+        else dataclasses.replace(c, severity=ChangeSeverity.BREAKING)
+        for c in changes
+    ]
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCK_TIMEOUT_SECONDS = 120
 _thread_locks: dict[str, threading.Lock] = {}
@@ -341,9 +394,12 @@ def _serialize_change(change: SchemaChange) -> dict:
         old_val = change.column_name
         new_val = change.new_value.name if hasattr(change.new_value, 'name') else str(change.new_value)
 
+    backward, forward = change_compatibility(change)
     return {
         "change_type": change.change_type.value,
         "severity": change.severity.value,
+        "backward_compatible": backward,
+        "forward_compatible": forward,
         "column_name": change.column_name,
         "constraint_name": change.constraint_name,
         "old_value": old_val,
@@ -679,6 +735,7 @@ def run_evolution_check(
     notifier=None,
     registry_key: str | None = None,
     target_table: str | None = None,
+    compatibility: str = DEFAULT_COMPATIBILITY,
 ) -> dict:
     # Kafka và polling có thể cùng xử lý 1 thay đổi: khoá theo bảng, người
     # vào sau đọc lại registry đã cập nhật -> "no_change", không trùng DDL
@@ -686,7 +743,7 @@ def run_evolution_check(
     key = registry_key if registry_key is not None else table_name
     with registry.lock(key):
         return _run_evolution_check_unlocked(
-            source_engine, target_engine, table_name, registry, notifier, key, target_table
+            source_engine, target_engine, table_name, registry, notifier, key, target_table, compatibility
         )
 
 
@@ -698,6 +755,7 @@ def _run_evolution_check_unlocked(
     notifier,
     registry_key: str,
     target_table: str | None = None,
+    compatibility: str = DEFAULT_COMPATIBILITY,
 ) -> dict:
     """
     source_engine: DB bị theo dõi thay đổi — chỉ dùng để crawl_metadata,
@@ -765,6 +823,7 @@ def _run_evolution_check_unlocked(
     changes = compare_schemas(old_schema, current_schema)
     if not changes:
         return {"status": "no_change", "table": table_name}
+    changes = apply_compatibility_policy(changes, compatibility)
 
     non_breaking = [c for c in changes if c.severity == ChangeSeverity.NON_BREAKING]
     breaking = [c for c in changes if c.severity == ChangeSeverity.BREAKING]

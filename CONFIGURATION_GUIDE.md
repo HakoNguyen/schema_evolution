@@ -76,7 +76,35 @@ tables:
 detection:
   mode: polling
   interval_seconds: 300         # chu kỳ quét riêng của pipeline này
+
+# 5. CHÍNH SÁCH TIẾN HOÁ (tuỳ chọn, mặc định backward)
+compatibility: backward         # backward | forward | full | none
 ```
+
+**Chính sách tiến hoá (Evolution Policy).** `compatibility` quy định thay đổi nào được engine tự đồng bộ. Định nghĩa theo Kleppmann (*Designing Data-Intensive Applications*, ch. 4) và Confluent Schema Registry:
+
+| Mức | Nghĩa | Tự đồng bộ |
+|---|---|---|
+| `backward` (mặc định) | schema mới đọc được dữ liệu cũ | thêm cột nullable/có default, nới kiểu, `NOT NULL → NULL`, bỏ khoá ngoại |
+| `forward` | consumer còn dùng schema cũ đọc được dữ liệu mới | chỉ thêm cột nullable/có default |
+| `full` | cả hai | chỉ thêm cột nullable/có default |
+| `none` | không kiểm tra tương thích | như `backward` (xem dưới) |
+
+Mức tương thích của từng loại thay đổi:
+
+| Thay đổi | Backward | Forward |
+|---|---|---|
+| Thêm cột nullable / có default | ✓ | ✓ |
+| Thêm cột `NOT NULL` không default | ✗ | ✓ |
+| Xoá cột (nullable / `NOT NULL`) | ✓ | ✓ / ✗ |
+| Đổi tên cột, đổi kiểu không tương thích | ✗ | ✗ |
+| Nới rộng kiểu, `NOT NULL → NULL` | ✓ | ✗ |
+| Thu hẹp kiểu, `NULL → NOT NULL` | ✗ | ✓ |
+| Thêm khoá ngoại | ✗ | ✓ |
+| Bỏ khoá ngoại | ✓ | ✗ |
+| Thêm / bỏ / đổi khoá chính, đổi đích hoặc hành động của khoá ngoại | ✗ | ✗ |
+
+Chính sách **chỉ làm chặt hơn**, không bao giờ nới. Ở mức nào đi nữa, engine cũng không tự chạy DDL phá dữ liệu ở đích (xoá cột, thu hẹp kiểu, đổi khoá). Ví dụ: xoá cột tương thích backward, nhưng vẫn bị freeze chờ người duyệt. Vì vậy `none` cho kết quả giống `backward`. Thay đổi bị chặn sẽ hiện trên trang Monitored Tables kèm nhãn `BACKWARD ✓/✗` và `FORWARD ✓/✗`. Sửa `compatibility` (trong file hoặc ở form Configuration) có hiệu lực sau khoảng 3 giây.
 
 **Engine không tạo bảng đích.** Lúc khai báo pipeline, bảng đích phải có sẵn và khớp nguồn (việc nạp dữ liệu ban đầu là của ETL). Lần quét đầu tiên engine lấy schema nguồn hiện tại làm baseline (v1), từ đó mới theo dõi thay đổi.
 

@@ -6,6 +6,9 @@ Các bước kịch bản demo: chạy DDL trên nguồn (vai dev) và đo thờ
     python -m demo.scenario rename        # breaking     -> freeze, chờ duyệt
     python -m demo.scenario narrow        # breaking     -> freeze, chờ duyệt
     python -m demo.scenario rollback      # dev hoàn tác narrow -> engine tự gỡ freeze
+    python -m demo.scenario policy_widen  # sau khi đặt market_trades compatibility: forward -> freeze
+    python -m demo.scenario add_fk        # đổi quan hệ (thêm khoá ngoại) -> freeze, chờ duyệt
+    python -m demo.scenario drop_fk       # dev bỏ khoá ngoại -> engine tự gỡ freeze
     python -m demo.scenario tickers_drop     # pipeline 2: breaking -> CHỈ market_tickers bị freeze
     python -m demo.scenario tickers_restore  # dev thêm lại cột -> engine tự gỡ freeze market_tickers
     python -m demo.scenario orders_add_field   # Mongo: app ghi thêm field -> tự thêm cột ở ClickHouse
@@ -74,6 +77,28 @@ STEPS = {
         sql="ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(20)",
         expect="clear",
         story="Dev rollback thay đổi nguy hiểm trên nguồn -> engine thấy nguồn khớp baseline, tự gỡ freeze",
+    ),
+    # Evolution Policy: chạy SAU khi đổi market_trades sang compatibility: forward (form Configuration
+    # hoặc YAML). Nới kiểu tương thích backward nhưng KHÔNG forward -> ở mức forward phải freeze chờ duyệt.
+    "policy_widen": dict(
+        sql="ALTER TABLE trades ALTER COLUMN price TYPE NUMERIC(28,8)",
+        expect="frozen",
+        story="Pipeline đặt policy FORWARD: nới price lên NUMERIC(28,8) làm consumer cũ không đọc được giá trị mới "
+              "-> engine chặn, chờ duyệt (ở mức BACKWARD thay đổi này được tự đồng bộ)",
+    ),
+    # Đổi quan hệ: message Debezium không mang khoá ngoại -> chỉ lần quét metadata định kỳ
+    # (fallback_polling_interval_seconds, mặc định 60s) mới thấy. NOT VALID: không kiểm tra lại dòng cũ;
+    # dòng mới luôn hợp lệ vì ingestor ghi cùng bộ symbol vào tickers.
+    "add_fk": dict(
+        sql="ALTER TABLE trades ADD CONSTRAINT fk_trades_symbol FOREIGN KEY (symbol) REFERENCES tickers(symbol) NOT VALID",
+        expect="frozen",
+        story="Dev thêm khoá ngoại trades.symbol -> tickers.symbol: đổi quan hệ dữ liệu, phải có người duyệt "
+              "(phát hiện ở lần quét metadata kế tiếp, tối đa ~60s)",
+    ),
+    "drop_fk": dict(
+        sql="ALTER TABLE trades DROP CONSTRAINT IF EXISTS fk_trades_symbol",
+        expect="clear",
+        story="Dev bỏ khoá ngoại vừa thêm -> nguồn khớp baseline, engine tự gỡ freeze",
     ),
     # Pipeline 2 chạy song song: freeze market_tickers không được làm dừng market_trades.
     "tickers_drop": dict(

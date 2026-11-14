@@ -78,7 +78,8 @@ Three design principles:
 ## 3. Features
 
 **Engine**
-- Automatic classification: add column, widen type and `NOT NULL → NULL` are non-breaking; rename (inferred from a dropped/added column pair), drop column, narrow type and incompatible type changes are breaking.
+- Automatic classification: add column, widen type and `NOT NULL → NULL` are non-breaking; rename (inferred from a dropped/added column pair), drop column, narrow type and incompatible type changes are breaking. Relationship changes (adding, dropping or changing a primary or foreign key) are detected too.
+- **Compatibility-level evolution policy** `backward | forward | full | none` per pipeline (`compatibility:` in YAML). Every change is labelled backward/forward compatible, and only changes that meet the chosen level are auto-synced. See `CONFIGURATION_GUIDE.md` section 2.
 - **Lossless** target types: `NUMERIC` → `Decimal` (never `Float64`, which rounds money), `TIMESTAMP` → `DateTime64(6)`, `DATE` → `Date32`.
 - **Sandbox before approval**: Postgres runs the DDL in a transaction and rolls it back; MySQL and ClickHouse clone the table, copy a sample of real rows and run the DDL on the copy.
 - **Approve or reject** in the web UI or the CLI (`python -m app.unfreeze_cli list | view | approve | reject <pipeline/table>`). The history records who approved.
@@ -176,6 +177,8 @@ Each command below plays the developer changing the source schema, then measures
 | `rename` | `ALTER TABLE trades RENAME COLUMN qty TO quantity` | The table freezes and the loader shows `paused`. Approve it in the UI (Sandbox, then Approve) and the loader continues, including old messages that still carry `qty` |
 | `narrow` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(10)` | The table freezes (risk of truncation). Do **not** approve |
 | `rollback` | `ALTER TABLE trades ALTER COLUMN symbol TYPE VARCHAR(20)` | The source matches the baseline again, so the engine unfreezes the table |
+| `add_fk` | `ALTER TABLE trades ADD CONSTRAINT fk_trades_symbol FOREIGN KEY (symbol) REFERENCES tickers(symbol) NOT VALID` | A relationship change: the table freezes. CDC messages carry no foreign keys, so the periodic metadata scan catches it (within about 60 seconds) |
+| `drop_fk` | `ALTER TABLE trades DROP CONSTRAINT fk_trades_symbol` | The source matches the baseline again, so the engine unfreezes the table |
 
 **Pipeline `market_tickers`**: `tickers_drop` (`DROP COLUMN low_price`) freezes **only** this pipeline while `market_trades` keeps running. `tickers_restore` adds the column back and the table reopens. If the `market_tickers_replica` pipeline (level 3) is enabled, the engine also **pauses** its Kafka Connect sink during the freeze and **resumes** it afterwards.
 
@@ -263,7 +266,7 @@ Full demo rehearsal on **2026-11-12** (Windows 11, Docker Desktop, live Binance 
 | Final check (`demo.check`) | **21,098 / 21,098 rows match**; the control pipeline is missing 17,509 rows | |
 | Replica table (level 3) | Identical to the source table (same md5 hash) | |
 
-Repeated measurements (p50, p95) produced by `python -m demo.bench` are stored in [`demo/results/`](demo/results/).
+Repeated measurements (p50, p95) produced by `python -m demo.bench` are stored in [`demo/results/`](demo/results/). `python -m demo.charts` (needs `pip install matplotlib`) plots them into `demo/results/charts/`.
 
 ---
 

@@ -50,4 +50,6 @@ Open-Window 'check' "& '$py' -m demo.check --watch --report"
 Write-Host ''
 Write-Host 'Wait ~60s for the consumer groups to settle, then open http://localhost:5173 (Pipelines Overview).'
 Write-Host 'Scenario steps: python -m demo.scenario add_column | widen | rename | narrow | rollback | tickers_drop | tickers_restore'
+Write-Host 'Relationship:   python -m demo.scenario add_fk | drop_fk'
+Write-Host 'Policy:         set market_trades to FORWARD (Configuration page), then python -m demo.scenario policy_widen'
 Write-Host 'MongoDB steps:  python -m demo.scenario orders_add_field | orders_drop_field | orders_bad_type | orders_fix'

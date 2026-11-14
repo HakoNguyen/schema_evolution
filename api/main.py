@@ -1,5 +1,5 @@
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 # pyrefly: ignore [missing-import]
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -179,9 +179,9 @@ def list_components(pipeline: str):
 
 
 @app.get("/api/events")
-def get_cdc_events():
+def get_cdc_events(limit: int = Query(50, ge=1, le=2000)):
     from app.event_log import event_logger
-    return event_logger.get_events()
+    return event_logger.get_events(limit)
 
 
 # Live Events chỉ là nhật ký: xoá không đổi freeze, baseline hay bảng chờ duyệt. Khi bật auth: cần admin.
@@ -370,15 +370,18 @@ def get_table_version_detail(registry_key: str, version: int):
     schema = registry.load_version(registry_key, version)
     if not schema:
         return {"exists": False}
-        
+    return {"exists": True, "schema": _schema_json(schema)}
+
+
+def _schema_json(schema) -> dict:
+    # precision/scale: thiếu chúng thì NUMERIC(18,8) -> (24,8) trông như không đổi trên UI.
     return {
-        "exists": True,
-        "schema": {
-            "table_name": schema.table_name,
-            "columns": [{"name": c.name, "data_type": c.data_type, "nullable": c.nullable, "default": c.default, "max_length": c.max_length} for c in schema.columns],
-            "primary_key": schema.primary_key,
-            "foreign_keys": [{"column_name": fk.column_name, "ref_table": fk.ref_table, "ref_column": fk.ref_column, "on_delete": fk.on_delete} for fk in schema.foreign_keys]
-        }
+        "table_name": schema.table_name,
+        "columns": [{"name": c.name, "data_type": c.data_type, "nullable": c.nullable, "default": c.default,
+                     "max_length": c.max_length, "precision": c.precision, "scale": c.scale} for c in schema.columns],
+        "primary_key": schema.primary_key,
+        "foreign_keys": [{"constraint_name": fk.constraint_name, "column_name": fk.column_name, "ref_table": fk.ref_table,
+                          "ref_column": fk.ref_column, "on_delete": fk.on_delete} for fk in schema.foreign_keys],
     }
 
 @app.get("/api/tables/{registry_key:path}")
@@ -390,17 +393,7 @@ def get_table_details(registry_key: str):
     if not schema:
         return {"exists": False}
         
-    version = registry.get_version(registry_key)
-    return {
-        "exists": True,
-        "version": version,
-        "schema": {
-            "table_name": schema.table_name,
-            "columns": [{"name": c.name, "data_type": c.data_type, "nullable": c.nullable, "default": c.default, "max_length": c.max_length} for c in schema.columns],
-            "primary_key": schema.primary_key,
-            "foreign_keys": [{"column_name": fk.column_name, "ref_table": fk.ref_table, "ref_column": fk.ref_column, "on_delete": fk.on_delete} for fk in schema.foreign_keys]
-        }
-    }
+    return {"exists": True, "version": registry.get_version(registry_key), "schema": _schema_json(schema)}
 
 @app.post("/api/tables/{registry_key:path}/approve")
 def approve_changes(registry_key: str, request: Request):

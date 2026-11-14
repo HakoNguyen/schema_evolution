@@ -125,6 +125,8 @@ def reset() -> None:
     print("[reset] registry")
     for pipeline in (c.PIPELINE_NAME, c.TICKERS_PIPELINE, c.REPLICA_PIPELINE, c.ORDERS_PIPELINE):
         shutil.rmtree(ROOT / "data" / "registry" / pipeline, ignore_errors=True)
+    # Nhật ký sự kiện mô tả các phiên bản vừa bị xoá: giữ lại thì Dashboard đếm cả lần dượt trước.
+    (ROOT / "data" / "registry" / "_events.jsonl").unlink(missing_ok=True)
 
 
 def setup() -> None:
